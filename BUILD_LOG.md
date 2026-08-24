@@ -1057,3 +1057,129 @@ Summary: 9 resources found parsing stdin - Valid: 9, Invalid: 0, Errors: 0, Skip
      livenessProbe   -> celery ... inspect ping
 ```
 
+## Phase 14 — Full-stack correlation smoke test — **PASS**
+
+**Built:** `scripts/smoke.py` (`make smoke`). It waits for the stack, performs
+three real operations — upload a file, run a background job, trigger
+`/demo/boom` — captures each `X-Request-ID`, then interrogates **each store
+independently** (not through the API that wrote to it) and asserts the id is
+there: Loki for logs, Tempo for the trace, Postgres for the audit row,
+Prometheus for the counters, and the correlated error response. It exits
+non-zero if any required leg is missing.
+
+### Bug 1 (found by the gate) — the audit query silently returned nothing
+
+The first run reported `no audit row` for every operation, even though the rows
+were present. `psql` does **not** expand `:'var'` variables in a `-c` command
+string. Fixed by feeding the SQL on stdin (`-f -`), keeping the id out of the
+SQL text — the predicate is never built by string formatting.
+
+### Bug 2 (found by the gate) — error responses had no `X-Trace-ID`
+
+The boom step could never find its trace, because the 500 response carried no
+`X-Trace-ID` header at all: `ServerErrorMiddleware` is outermost, so the
+correlation middleware never sees that response, and the error renderer was
+setting only `X-Request-ID`. The body had the trace id but the header did not —
+an inconsistency in the Correlation Contract. Fixed in `app/errors.py`.
+
+### Bug 3 (found by the gate) — the report cried wolf
+
+A background job legitimately writes no audit row, but the table printed a red
+`FAIL` for it. A check that fails for something never expected teaches people
+to ignore the report, so a non-required missing check now renders `--` with an
+explicit `n/a` note.
+
+### Gate — `make smoke` exits 0 and prints the correlation table
+
+```
+1. Waiting for the stack
+  ready: {"redis": "ok", "postgres": "ok", "storage": "ok"}
+  tempo: available
+
+2. Driving the stack
+  upload      request_id=8da264a6-57c3-4161-a21f-c2359640ad71  file_id=427f3906-...
+  job         request_id=76fbaed9-2abe-4db7-8cc6-0eec14e36a4f  task_id=d6ab8d17...
+  boom        request_id=fa82d638-44f1-4c76-82dd-323a8a7959ea  HTTP 500
+
+4. Interrogating each store independently
+  loki    upload a file: 3 line(s) in Loki
+  loki    trigger a background job: 1 line(s) in Loki
+  loki    trigger /demo/boom: 5 line(s) in Loki
+  tempo   upload a file: 9 span(s) in Tempo
+  tempo   trigger a background job: 8 span(s) in Tempo
+  tempo   trigger /demo/boom: 6 span(s) in Tempo
+  audit   upload a file: 1 row(s): file.uploaded
+  audit   trigger a background job: n/a - this operation writes no audit row
+  audit   trigger /demo/boom: 1 row(s): demo.boom
+  worker  trigger a background job: result.request_id=76fbaed9-..., 5 worker log line(s)
+  metric  upload a file: /files: 0 -> 1
+  metric  trigger a background job: /demo/job: 0 -> 1
+  metric  trigger /demo/boom: /demo/boom: 1 -> 2
+
+5. Correlation report
+  operation                  request_id                             log   trace  audit  metric  error  worker
+  ------------------------------------------------------------------------------------------------------------
+  upload a file              8da264a6-57c3-4161-a21f-c2359640ad71   OK    OK     OK     OK      --     --
+  trigger a background job   76fbaed9-2abe-4db7-8cc6-0eec14e36a4f   OK    OK     --     OK      --     OK
+  trigger /demo/boom         fa82d638-44f1-4c76-82dd-323a8a7959ea   OK    OK     OK     OK      OK     --
+
+  note: SENTRY_DSN is not set, so the Sentry leg is not asserted.
+        The error leg still checks the correlated error response.
+  SMOKE PASSED - one request_id joins logs, traces, audit and metrics.
+
+SMOKE EXIT: 0
+```
+
+**On the Sentry leg.** No Sentry DSN is configured here, so `make smoke` does
+not claim to have checked Sentry — it says so explicitly rather than showing a
+green cell it did not earn. The Sentry path *was* verified for real in Phase 8
+against a local envelope sink: one event, tagged with the matching `request_id`
+and `trace_id`. With `SENTRY_DSN` set, the same events flow to a real project.
+
+---
+
+# FINAL STATE
+
+## Definition of Done
+
+| Requirement | Status |
+|---|---|
+| `docker compose up` brings up app, worker, postgres, redis, minio, loki, promtail, prometheus, grafana | **Done** — `config --services` lists exactly those nine (Tempo is an opt-in `tracing` profile) |
+| All 15 gates (Phase 0–14) recorded PASS with real output | **Done** — this file |
+| One `request_id` traces across logs, traces, audit, metrics and errors | **Done** — Phase 14 table, `make smoke` exit 0 |
+| README documents running locally, tests, the correlation model, the swap points and the auth seam | **Done** — `README.md` |
+
+## Final verification
+
+```
+$ make lint        -> All checks passed! / 51 files already formatted
+$ make typecheck   -> Success: no issues found in 33 source files
+$ make test        -> 116 passed; coverage 86.84% (gate 80%)
+$ make smoke       -> SMOKE PASSED, exit 0
+$ trivy fs .       -> 0 findings, exit 0
+$ trivy image      -> 0 HIGH/CRITICAL, exit 0
+$ kubeconform      -> Valid: 9, Invalid: 0
+```
+
+## Bugs the gates caught
+
+Fifteen defects were found only because each gate inspected real output rather
+than assuming success:
+
+| Phase | Bug |
+|---|---|
+| 5 | Logs double-encoded — the whole JSON object nested inside `"event"` |
+| 6 | Metrics named `app_http_http_requests_total` |
+| 8 | The 500 response lost its `request_id` entirely |
+| 8 | One failure produced three Sentry events |
+| 11 | Container crash-looping from a multi-line `CMD` JSON form |
+| 11 | `Server: uvicorn` banner not removable from middleware |
+| 11 | Error responses shipped with no security headers |
+| 12 | Duplicate `X-Request-ID` header on handled errors |
+| 12 | `make test` deadlocked mixing sync Playwright with asyncio |
+| 12 | `create_app()` could only be called once per process |
+| 12 | A Grafana panel had queried a metric name that never existed |
+| 13 | Ten real type errors — `mypy` had never actually been run |
+| 14 | The audit assertion silently returned nothing (`psql -c` ignores `:'var'`) |
+| 14 | Error responses carried no `X-Trace-ID` |
+| 14 | The smoke report showed `FAIL` for a check that was never required |

@@ -92,21 +92,26 @@ def _render(
 ) -> JSONResponse:
     """Build the error response, stamping the correlation ids and security headers."""
     request_id = current_request_id()
+    trace_id = current_trace_id()
     payload = ErrorResponse(
         error=error,
         message=message,
         request_id=request_id,
-        trace_id=current_trace_id(),
+        trace_id=trace_id,
         detail=detail,
     )
     response = JSONResponse(
         status_code=status_code,
         content=jsonable_encoder(payload, exclude_none=True),
     )
-    # Also echo it here: the correlation middleware sets this too, but an error
-    # raised before it runs would otherwise lose the id.
+    # Echo both ids here as well. The correlation middleware sets them on
+    # normal responses, but Starlette's ServerErrorMiddleware sits OUTSIDE all
+    # user middleware, so a 500 it generates never passes back through it --
+    # without this an error response would ship with no X-Trace-ID at all.
     if request_id:
         response.headers["X-Request-ID"] = request_id
+    if trace_id:
+        response.headers["X-Trace-ID"] = trace_id
 
     # Starlette's ServerErrorMiddleware is the OUTERMOST layer, so a 500 it
     # generates never passes back through SecurityHeadersMiddleware. Stamp the
