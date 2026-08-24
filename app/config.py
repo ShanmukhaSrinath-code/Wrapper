@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_user: str = "appuser"
     postgres_password: str = "apppassword"  # noqa: S105 - local compose default, overridden by env
+    #: Least-privilege role the *application* connects as. It owns nothing and
+    #: has INSERT+SELECT only on audit_log, so the app cannot rewrite, erase or
+    #: unguard its own audit trail. Migrations use `postgres_user` above, which
+    #: owns the schema. See app/db/README.md.
+    postgres_app_user: str = "appruntime"
+    postgres_app_password: str = "appruntimepassword"  # noqa: S105 - local compose default
     postgres_db: str = "appdb"
     db_pool_size: int = 5
     db_max_overflow: int = 10
@@ -119,7 +125,25 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def database_url(self) -> str:
-        """Async SQLAlchemy DSN."""
+        """Async DSN for the **application**, as the least-privilege role.
+
+        Deliberately not the owner role: the app must not be able to UPDATE,
+        DELETE or TRUNCATE audit_log, nor drop the triggers that stop it.
+        """
+        return (
+            f"postgresql+asyncpg://{self.postgres_app_user}:{self.postgres_app_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def migration_database_url(self) -> str:
+        """Async DSN as the **owner** role -- used by Alembic.
+
+        Migrations create tables and triggers, which the runtime role must not
+        be able to do. Keeping the two DSNs apart is what makes the audit-log
+        hardening real rather than advisory.
+        """
         return (
             f"postgresql+asyncpg://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
@@ -128,7 +152,7 @@ class Settings(BaseSettings):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def sync_database_url(self) -> str:
-        """Sync DSN -- used by Alembic and by Celery tasks."""
+        """Sync DSN as the **owner** role -- used by Alembic migrations only."""
         return (
             f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"

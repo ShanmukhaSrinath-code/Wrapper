@@ -26,7 +26,9 @@ from app.db.migration_guard import reject_destructive_ops
 import_discovered_models()
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Migrations run as the schema owner, not as the application's
+# least-privilege runtime role -- see Settings.migration_database_url.
+config.set_main_option("sqlalchemy.url", settings.migration_database_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -37,7 +39,7 @@ target_metadata = Base.metadata
 def run_migrations_offline() -> None:
     """Emit SQL to stdout without a live connection."""
     context.configure(
-        url=settings.database_url,
+        url=settings.migration_database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
