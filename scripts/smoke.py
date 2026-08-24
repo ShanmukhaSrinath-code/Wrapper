@@ -27,6 +27,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
 
 import httpx
@@ -179,7 +180,9 @@ async def do_boom(client: httpx.AsyncClient) -> Step:
 # ---------------------------------------------------------------------------
 # assertions, one per store
 # ---------------------------------------------------------------------------
-async def check_loki(client: httpx.AsyncClient, step: Step, attempts: int = 20) -> None:
+async def check_loki(
+    client: httpx.AsyncClient, step: Step, attempts: int = 20, *, note_trace: bool = True
+) -> None:
     start = int((time.time() - 900) * 1e9)
     query = f'{{service="app"}} | json | request_id = `{step.request_id}`'
     for _ in range(attempts):
@@ -208,7 +211,10 @@ async def check_loki(client: httpx.AsyncClient, step: Step, attempts: int = 20) 
                     )
                     if tr.json().get("data", {}).get("result"):
                         step.checks.setdefault("trace", OK)
-                        step.notes["trace"] = "trace_id present in logs"
+                        # Tempo reports a span count, which is stronger
+                        # evidence; do not overwrite it when Tempo is running.
+                        if note_trace:
+                            step.notes["trace"] = "trace_id present in logs"
                 return
         except Exception as exc:
             step.notes["log"] = f"{type(exc).__name__}"
@@ -425,25 +431,37 @@ async def main() -> int:
         await asyncio.sleep(20)
 
         section("4. Interrogating each store independently")
-        for s in steps:
-            await check_loki(client, s)
-            log(f"loki    {s.name}: {s.notes.get('log')}")
 
+        # Run every probe concurrently. Each one retries on its own schedule,
+        # and on a cold stack (Loki and Prometheus still warming up) doing them
+        # sequentially makes the worst cases additive -- minutes instead of
+        # seconds. Nothing here mutates shared state, so there is no reason to
+        # serialise them.
+        probes: list[Awaitable[object]] = [
+            check_loki(client, s, note_trace=not has_tempo) for s in steps
+        ]
         if has_tempo:
-            for s in steps:
-                await check_tempo(client, s)
-                log(f"tempo   {s.name}: {s.notes.get('trace')}")
+            probes += [check_tempo(client, s) for s in steps]
+        probes += [
+            check_metrics(client, upload, before_files, "/files"),
+            check_metrics(client, job, before_job, "/demo/job"),
+            check_metrics(client, boom, before_boom, "/demo/boom"),
+        ]
+        await asyncio.gather(*probes)
 
+        # These two shell out to docker, so they stay synchronous.
         for s in steps:
             check_audit(s)
-            log(f"audit   {s.name}: {s.notes.get('audit')}")
-
         check_worker_log(job)
-        log(f"worker  {job.name}: {job.notes.get('worker')}")
 
-        await check_metrics(client, upload, before_files, "/files")
-        await check_metrics(client, job, before_job, "/demo/job")
-        await check_metrics(client, boom, before_boom, "/demo/boom")
+        for s in steps:
+            log(f"loki    {s.name}: {s.notes.get('log')}")
+        if has_tempo:
+            for s in steps:
+                log(f"tempo   {s.name}: {s.notes.get('trace')}")
+        for s in steps:
+            log(f"audit   {s.name}: {s.notes.get('audit')}")
+        log(f"worker  {job.name}: {job.notes.get('worker')}")
         for s in steps:
             log(f"metric  {s.name}: {s.notes.get('metric')}")
 
