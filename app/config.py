@@ -18,6 +18,11 @@ from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _split_csv(raw: str) -> list[str]:
+    """Split a comma-separated setting into a clean list."""
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 class Settings(BaseSettings):
     """Typed view over the process environment."""
 
@@ -68,6 +73,16 @@ class Settings(BaseSettings):
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
 
+    # --- plugin discovery ----------------------------------------------------
+    # Where features live. Anything importable under these packages has its
+    # Celery tasks registered and its SQLAlchemy models added to Base.metadata,
+    # so a feature never has to be added to a list by hand.
+    plugin_packages: str = "app.services"
+    #: Extra packages scanned for tasks only (the base's own demo tasks).
+    task_packages: str = "app.jobs.tasks"
+    #: Extra packages scanned for models only (the base's own tables).
+    model_packages: str = "app.db.models,app.audit.models"
+
     # --- observability -------------------------------------------------------
     otel_enabled: bool = True
     otel_service_name: str = "common-app-base"
@@ -89,6 +104,18 @@ class Settings(BaseSettings):
     azure_key_vault_url: str | None = Field(default=None)
 
     # --- derived -------------------------------------------------------------
+    @property
+    def plugin_packages_list(self) -> list[str]:
+        return _split_csv(self.plugin_packages)
+
+    @property
+    def task_packages_list(self) -> list[str]:
+        return _split_csv(self.task_packages)
+
+    @property
+    def model_packages_list(self) -> list[str]:
+        return _split_csv(self.model_packages)
+
     @computed_field  # type: ignore[prop-decorator]
     @property
     def database_url(self) -> str:

@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from app import cache
 from app.audit import write_audit
 from app.errors import NotFoundError
-from app.jobs.tasks import always_fails, slow_add
+from app.jobs import enqueue
 from app.logging import current_request_id, current_trace_id
 from app.security.current_user import CurrentUser
 
@@ -143,7 +143,13 @@ async def enqueue_job(
     The correlation ids ride along on the message headers, so the worker logs
     under this request's `request_id` -- see app/jobs/celery_app.py.
     """
-    task = always_fails.delay() if fail else slow_add.delay(a, b, delay_seconds)
+    # `enqueue` refuses names nobody registered, so this route cannot return a
+    # task id for work that will never run.
+    task = (
+        enqueue("demo.always_fails")
+        if fail
+        else enqueue("demo.slow_add", a, b, delay_seconds)
+    )
     return JobAccepted(task_id=task.id, status="queued", request_id=current_request_id())
 
 

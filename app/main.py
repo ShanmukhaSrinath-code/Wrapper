@@ -15,6 +15,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import __version__, cache, storage
 from app.api import demo, docs, files, health
 from app.config import Settings, settings
+from app.core.discovery import import_discovered_models
+from app.jobs.celery_app import load_tasks
 from app.db import session as db_session
 from app.errors import configure_sentry, register_exception_handlers
 from app.logging import configure_logging, get_logger
@@ -40,6 +42,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The engine must exist before it can be instrumented, and it is built
     # lazily -- so this belongs in lifespan, not in create_app().
     instrument_sqlalchemy(db_session.get_engine())
+    # Register every discovered task in *this* process too. The API and the
+    # worker run the same discovery, so `enqueue()` can trust its registry
+    # check: if the name is missing here, the worker does not have it either.
+    task_modules = load_tasks()
+    # Same for models -- importing them keeps Base.metadata complete for any
+    # code that reflects on it at runtime.
+    model_modules = import_discovered_models()
     # Create the bucket if it does not exist, so a fresh stack works on the
     # first upload instead of failing once.
     try:
@@ -51,6 +60,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         version=__version__,
         environment=settings.environment,
         readiness_checks=list(health.registered_checks()),
+        task_modules=task_modules,
+        model_modules=model_modules,
     )
     yield
     log.info("app.shutdown")

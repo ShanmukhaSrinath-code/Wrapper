@@ -20,6 +20,7 @@ from typing import Any
 
 from celery import Celery
 from celery.signals import (
+    import_modules as celery_on_after_configure,
     before_task_publish,
     setup_logging,
     task_failure,
@@ -46,7 +47,8 @@ celery_app = Celery(
     "common-app-base",
     broker=settings.broker_url,
     backend=settings.result_backend,
-    include=["app.jobs.tasks"],
+    # No `include=[...]`: task modules are discovered, not listed. See
+    # `load_tasks()` at the bottom of this module.
 )
 
 celery_app.conf.update(
@@ -133,3 +135,29 @@ def _report_failure(
             sentry_sdk.capture_exception(exception)
     except Exception as exc:
         log.debug("sentry.task_capture.failed", error=str(exc))
+
+
+def load_tasks() -> list[str]:
+    """Import every discovered task module, registering its tasks.
+
+    Called by the API process (at app startup) and by the worker (via the
+    `on_after_configure` signal below). Both use the same discovery pass, so the
+    two processes cannot disagree about which tasks exist -- which is what made
+    the old hardcoded `include` dangerous.
+
+    Import errors are fatal here, on purpose: a worker that starts with half its
+    tasks missing looks healthy and drops jobs.
+    """
+    # Imported lazily: app.core.discovery imports app.config, and importing it
+    # at module scope would make this module's import order matter.
+    from app.core.discovery import import_discovered_tasks
+
+    modules = import_discovered_tasks()
+    log.info("celery.tasks_loaded", module_count=len(modules), modules=modules)
+    return modules
+
+
+@celery_on_after_configure.connect
+def _load_tasks_in_worker(**_: Any) -> None:
+    """Register discovered tasks as soon as the worker has its config."""
+    load_tasks()
