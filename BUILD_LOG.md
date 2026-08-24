@@ -225,3 +225,78 @@ $ docker start cab-redis && curl localhost:8000/health/ready
 {"status":"ok","service":"common-app-base","checks":{"redis":"ok","postgres":"ok"}}
 ```
 
+## Phase 5 — Structured logging + Correlation + Loki/Grafana — **PASS**
+
+**Built:** `app/logging.py` (structlog → JSON, correlation ids held in
+`contextvars` and merged into every line, stdlib loggers — uvicorn, SQLAlchemy,
+Celery — routed through the same pipeline so *their* lines carry the ids too);
+`app/middleware/correlation.py`, the Correlation Contract as one pure-ASGI
+middleware added outermost; `app/observability.py` (TracerProvider installed
+even with no exporter, so `trace_id` is always real); `loki` + `promtail` +
+`grafana` in compose with the Loki and Prometheus datasources provisioned.
+
+**Bug found and fixed during the gate.** The first run emitted
+double-encoded logs — the whole JSON object nested inside `"event"` — because
+structlog rendered the line *and* the stdlib `ProcessorFormatter` rendered it
+again. Fixed by ending structlog's chain with
+`ProcessorFormatter.wrap_for_formatter` so exactly one render happens. Caught
+only because the gate inspected the actual bytes rather than trusting that
+logging "worked".
+
+**Port note.** Host port 3000 was already taken by an unrelated `open-webui`
+container, so Grafana publishes on **3001**, overridable via `GRAFANA_PORT`.
+
+### Gate 1 — `X-Request-ID` returned, propagated, and validated
+
+```
+$ curl -D - "localhost:8000/demo/cached?seed=42"
+HTTP/1.1 200 OK
+x-request-id: 9bc89a98-f1b1-443c-b755-664ea77e740e
+x-trace-id:   b76729e40172cfcde80507c6de4ce4f3
+
+$ curl -H "X-Request-ID: my-own-id-12345" ...      # inbound id honoured
+x-request-id: my-own-id-12345
+
+$ curl -H 'X-Request-ID: bad;id$(injection)' ...   # bad id rejected, fresh UUID minted
+x-request-id: 8b53476d-4ff6-4cb5-bce2-3a8c5cc493b8
+```
+
+### Gate 2 — every log line is JSON and carries `request_id`
+
+```json
+{
+  "http_method": "GET", "http_path": "/demo/cached", "http_status": 200,
+  "duration_ms": 262.3, "client_ip": "172.19.0.1",
+  "event": "request.completed",
+  "request_id": "2c42c583-0453-42ed-af83-e34d15679744",
+  "span_id":  "8128a2859e401161",
+  "trace_id": "36ad1040e7ad5b41d35aba81d0929172",
+  "level": "info", "logger": "app.middleware.correlation",
+  "timestamp": "2026-08-24T06:13:08.941990Z",
+  "service": "common-app-base", "environment": "local"
+}
+```
+
+### Gate 3 — filter Loki by that `X-Request-ID` and get the request's lines
+
+```
+$ curl -G localhost:3100/loki/api/v1/query_range \
+    --data-urlencode 'query={service="app"} | json | request_id = `2c42c583-...`'
+status: success
+streams matched: 1
+  line: {"http_method": "GET", ..., "request_id": "2c42c583-0453-42ed-af83-e34d15679744", ...}
+```
+
+### Gate 4 — the same query *through Grafana* (Explore → Loki equivalent)
+
+```
+$ curl -u admin:admin localhost:3001/api/datasources
+  Loki         type=loki         uid=loki         url=http://loki:3100
+  Prometheus   type=prometheus   uid=prometheus   url=http://prometheus:9090
+
+$ curl -u admin:admin -G localhost:3001/api/datasources/proxy/uid/loki/loki/api/v1/query_range \
+    --data-urlencode 'query={service="app"} | json | request_id = `2c42c583-...`'
+status: success | streams: 1
+  request_id=2c42c583-0453-42ed-af83-e34d15679744 trace_id=36ad1040e7ad5b41d35aba81d0929172 event=request.completed status=200
+```
+

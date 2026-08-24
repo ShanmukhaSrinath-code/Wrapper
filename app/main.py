@@ -15,12 +15,24 @@ from app import __version__, cache
 from app.api import demo, health
 from app.config import Settings, settings
 from app.db import session as db_session
+from app.logging import configure_logging, get_logger
+from app.middleware.correlation import CorrelationMiddleware
+from app.observability import configure_metrics, configure_tracing, instrument_app
+
+log = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start and stop long-lived resources (DB pool, Redis, ...)."""
+    log.info(
+        "app.startup",
+        version=__version__,
+        environment=settings.environment,
+        readiness_checks=list(health.registered_checks()),
+    )
     yield
+    log.info("app.shutdown")
     await db_session.dispose_engine()
     await cache.close_client()
 
@@ -33,6 +45,10 @@ def create_app(config: Settings | None = None) -> FastAPI:
     """
     config = config or settings
 
+    # Logging and tracing come first: everything below may want to log.
+    configure_logging()
+    configure_tracing(config)
+
     app = FastAPI(
         title=config.app_name,
         version=__version__,
@@ -42,6 +58,15 @@ def create_app(config: Settings | None = None) -> FastAPI:
         openapi_url="/openapi.json",
         lifespan=lifespan,
     )
+
+    # --- middleware ----------------------------------------------------------
+    # Added last => outermost. CorrelationMiddleware must wrap everything so
+    # even a failure inside another middleware still carries its request_id.
+    app.add_middleware(CorrelationMiddleware)
+
+    # --- observability -------------------------------------------------------
+    configure_metrics(app, config)
+    instrument_app(app, config)
 
     # --- readiness checks ----------------------------------------------------
     # Registered here rather than inside app/api/health.py so the health module

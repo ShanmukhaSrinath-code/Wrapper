@@ -1,0 +1,59 @@
+# Promtail scrapes container stdout via the Docker socket and ships it to Loki.
+# Our application logs JSON, so the pipeline parses it and promotes the
+# correlation ids to structured metadata -- that is what makes
+# `| request_id = "..."` work in Grafana Explore.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=common-app-base"]
+
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: "container"
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: "service"
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: "stream"
+      - target_label: "job"
+        replacement: "docker"
+
+    pipeline_stages:
+      # Application lines are JSON; anything else falls through untouched.
+      - json:
+          expressions:
+            level: level
+            event: event
+            request_id: request_id
+            trace_id: trace_id
+            span_id: span_id
+            app_service: service
+            timestamp: timestamp
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+          action_on_failure: fudge
+      # Low-cardinality values become labels...
+      - labels:
+          level:
+      # ...ids become structured metadata: queryable, but they do NOT create a
+      # new Loki stream per request the way a label would.
+      - structured_metadata:
+          request_id:
+          trace_id:
+          span_id:
