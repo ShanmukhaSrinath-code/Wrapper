@@ -544,3 +544,96 @@ Sentry events after 3 EXPECTED errors (404, 404, 422): 0
 {"event":"sentry.disabled","reason":"SENTRY_DSN is not set","level":"info","logger":"app.errors"}
 ```
 
+## Phase 9 — File storage (MinIO, S3-compatible) — **PASS**
+
+**Built:** `minio` in compose; `app/storage/` with the `Storage` interface
+(`base.py`), the `MinioStorage` boto3 adapter and the `AzureBlobStorage` stub
+that is the documented swap point; `app/db/models/stored_file.py`;
+`app/api/files.py` with `POST /files`, `GET /files/{id}`,
+`GET /files/{id}/content` and `GET /files/{id}/download-url` (presigned
+redirect). `/health/ready` now pings storage too.
+
+Design points:
+- **Nothing imports an adapter directly** — only `get_storage()` — which is
+  what keeps `STORAGE_PROVIDER=azure_blob` a config change.
+- **boto3 is synchronous**, so every call goes through `asyncio.to_thread`
+  rather than blocking the event loop.
+- **Presigned URLs are signed with a separate public endpoint client**: inside
+  compose the app reaches MinIO at `http://minio:9000`, but a browser must be
+  handed `http://localhost:9000`, and the signature is endpoint-specific.
+- **Upload keys are sanitised** (`filename.rsplit("/")[-1]`), so a crafted
+  filename cannot escape its `uploads/YYYY/MM/DD/<uuid>/` prefix.
+
+### Gate 1 — upload returns an id
+
+```
+$ curl -D - -F "file=@upload.txt;type=text/plain" localhost:8000/files
+HTTP/1.1 201 Created
+x-request-id: 90b96802-6158-421b-9b06-83a79cf66c29
+{
+    "id": "0f8be724-1ae5-4c1f-9819-2599be773062",
+    "filename": "upload.txt",
+    "content_type": "text/plain",
+    "size_bytes": 77,
+    "checksum_sha256": "d6702f6200f2c241ef9a344312126674937b63a155e3f5fbcdbf6a6d45676c2a",
+    "uploaded_by": "dev",
+    "storage_key": "uploads/2026/08/24/0f8be724-.../upload.txt"
+}
+```
+
+### Gate 2 — fetching by id returns the *same bytes*
+
+```
+$ curl -o down.txt localhost:8000/files/0f8be724-.../content
+HTTP/1.1 200 OK
+content-disposition: attachment; filename="upload.txt"
+x-checksum-sha256: d6702f6200f2c241ef9a344312126674937b63a155e3f5fbcdbf6a6d45676c2a
+
+$ cmp upload.txt down.txt
+  IDENTICAL (cmp exit 0)
+  original sha256: d6702f6200f2c241ef9a344312126674937b63a155e3f5fbcdbf6a6d45676c2a
+  fetched  sha256: d6702f6200f2c241ef9a344312126674937b63a155e3f5fbcdbf6a6d45676c2a
+```
+
+Presigned redirect fetched directly from MinIO, bypassing the app: HTTP 200,
+bytes identical.
+
+### Gate 3 — the DB stores the key, not the blob
+
+```
+$ psql -c "SELECT column_name, data_type FROM information_schema.columns WHERE table_name='stored_file';"
+   column_name   |        data_type
+-----------------+--------------------------
+ storage_key     | character varying          <- the pointer
+ filename        | character varying
+ content_type    | character varying
+ size_bytes      | bigint
+ checksum_sha256 | character varying
+ uploaded_by     | character varying
+ id              | uuid
+ created_at      | timestamp with time zone
+ updated_at      | timestamp with time zone
+(9 rows)                                       <- no bytea/blob column
+```
+
+And the bytes are in MinIO:
+
+```
+$ mc ls -r local/app-files
+[2026-08-24 06:34:21 UTC]    77B STANDARD uploads/2026/08/24/0f8be724-.../upload.txt
+```
+
+### Gate 4 — an audit row was written for the upload, under the same `request_id`
+
+```
+action        | file.uploaded
+actor_id      | dev
+resource_type | file
+resource_id   | 0f8be724-1ae5-4c1f-9819-2599be773062
+request_id    | 90b96802-6158-421b-9b06-83a79cf66c29   <- the upload's X-Request-ID
+trace_id      | 29df4a1fc1e8c4d1304d13bb7a24ee85
+http_method   | POST
+http_path     | /files
+detail        | {"filename": "upload.txt", "size_bytes": 77, "storage_key": "...", "checksum_sha256": "d6702f62..."}
+```
+

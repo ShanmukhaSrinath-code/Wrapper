@@ -11,8 +11,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app import __version__, cache
-from app.api import demo, health
+from app import __version__, cache, storage
+from app.api import demo, files, health
 from app.config import Settings, settings
 from app.db import session as db_session
 from app.errors import configure_sentry, register_exception_handlers
@@ -34,6 +34,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The engine must exist before it can be instrumented, and it is built
     # lazily -- so this belongs in lifespan, not in create_app().
     instrument_sqlalchemy(db_session.get_engine())
+    # Create the bucket if it does not exist, so a fresh stack works on the
+    # first upload instead of failing once.
+    try:
+        await storage.get_storage().ensure_ready()
+    except Exception as exc:
+        log.warning("storage.ensure_ready.failed", error=str(exc))
     log.info(
         "app.startup",
         version=__version__,
@@ -86,10 +92,12 @@ def create_app(config: Settings | None = None) -> FastAPI:
     # never has to know which dependencies this deployment happens to use.
     health.register_readiness_check("postgres", db_session.ping)
     health.register_readiness_check("redis", cache.ping)
+    health.register_readiness_check("storage", storage.ping)
 
     # --- routers -------------------------------------------------------------
     app.include_router(health.router)
     app.include_router(demo.router)
+    app.include_router(files.router)
 
     return app
 

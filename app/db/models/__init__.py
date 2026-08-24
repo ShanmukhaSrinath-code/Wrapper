@@ -7,5 +7,6 @@ Every model must be imported here so Alembic autogenerate and
 from app.audit.models import AuditLog
 from app.db.base import Base
 from app.db.models.example import Example
+from app.db.models.stored_file import StoredFile
 
-__all__ = ["AuditLog", "Base", "Example"]
+__all__ = ["AuditLog", "Base", "Example", "StoredFile"]
