@@ -1,0 +1,25 @@
+# Common Application Base -- local stack.
+# Grows one service per build phase; `docker compose up` must always work.
+name: common-app-base
+
+services:
+  app:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: common-app-base:local
+    container_name: cab-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: common-app-base
+      ENVIRONMENT: local
+      LOG_LEVEL: INFO
+      LOG_JSON: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s

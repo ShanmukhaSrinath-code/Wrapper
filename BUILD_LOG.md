@@ -83,3 +83,39 @@ principal: {'id': 'dev', 'name': 'Local Developer', 'roles': ['dev'], 'tenant_id
 has_role(dev): True
 ```
 
+## Phase 2 — Docker + compose — **PASS**
+
+**Built:** `deploy/docker/Dockerfile` — multi-stage (`builder` resolves deps
+into a self-contained `/app/.venv` with `uv sync --frozen`, `runtime` copies
+that venv onto `python:3.12-slim-bookworm`). Dependencies are copied before
+source so a code edit never invalidates the dependency layer. Runs as the
+non-root `app` user (uid 1001) and carries a `HEALTHCHECK` pointed at
+`/health/live`. Plus `.dockerignore` and
+`deploy/compose/docker-compose.yml` with the `app` service.
+
+### Gate — health checks pass **against the container**
+
+```
+$ docker compose -f deploy/compose/docker-compose.yml up -d --build
+ Image common-app-base:local Built
+ Container cab-app Started
+
+$ docker compose ps
+NAME      IMAGE                   SERVICE   STATUS
+cab-app   common-app-base:local   app       Up 10 seconds (healthy)   0.0.0.0:8000->8000/tcp
+
+$ curl -s -w "\nHTTP %{http_code}\n" localhost:8000/health/live
+{"status":"ok","service":"common-app-base","version":"0.1.0"}
+HTTP 200
+
+$ curl -s -w "\nHTTP %{http_code}\n" localhost:8000/health/ready
+{"status":"ok","service":"common-app-base","checks":{}}
+HTTP 200
+
+$ docker exec cab-app id
+uid=1001(app) gid=1001(app) groups=1001(app)      # non-root
+
+$ docker images common-app-base:local
+common-app-base:local  412MB
+```
+
