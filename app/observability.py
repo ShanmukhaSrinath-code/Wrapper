@@ -21,6 +21,13 @@ log = get_logger(__name__)
 
 _tracing_configured = False
 
+#: The in-progress gauge is namespaced by hand: unlike the other metrics, the
+#: instrumentator does NOT apply `metric_namespace` to it.
+INPROGRESS_METRIC = "app_http_requests_inprogress"
+
+#: Prometheus collectors are process-global, so instrumentation runs once.
+_metrics_instrumented = False
+
 
 def configure_tracing(config: Settings) -> None:
     """Install a global TracerProvider.
@@ -117,22 +124,43 @@ def configure_metrics(app: FastAPI, config: Settings) -> None:
     Labels are route/method/status only. Correlation ids are deliberately NOT
     labels -- they are unbounded and would blow up cardinality. Ids live in
     logs and traces; metrics stay aggregate.
+
+    Instrumentation happens **once per process**. Prometheus collectors are
+    global, so instrumenting a second application -- which every test suite
+    does when it calls ``create_app()`` again -- would raise
+    ``DuplicateTimeseries`` on the first request. Later applications still get
+    a working ``/metrics`` endpoint; they simply reuse the collectors already
+    registered rather than creating a second set.
     """
     if not config.metrics_enabled:
         return
 
+    global _metrics_instrumented
+
     from prometheus_fastapi_instrumentator import Instrumentator
 
-    Instrumentator(
+    instrumentator = Instrumentator(
         should_group_status_codes=False,
         should_ignore_untemplated=True,
         should_instrument_requests_inprogress=True,
-        excluded_handlers=["/metrics", "/health/live", "/health/ready"],
+        # The instrumentator does not apply `metric_namespace` to this gauge,
+        # so it is namespaced by hand to match the other metrics (and the
+        # Grafana dashboard, which queries `app_http_requests_inprogress`).
+        inprogress_name=INPROGRESS_METRIC,
         inprogress_labels=True,
-    ).instrument(
-        app,
-        # Namespace only. The library's metric names already start with `http_`,
-        # so adding a subsystem would yield `app_http_http_requests_total`.
-        metric_namespace="app",
-        metric_subsystem="",
-    ).expose(app, endpoint="/metrics", include_in_schema=True, tags=["observability"])
+        excluded_handlers=["/metrics", "/health/live", "/health/ready"],
+    )
+
+    if not _metrics_instrumented:
+        instrumentator.instrument(
+            app,
+            # Namespace only. The library's metric names already start with
+            # `http_`, so a subsystem would yield `app_http_http_requests_total`.
+            metric_namespace="app",
+            metric_subsystem="",
+        )
+        _metrics_instrumented = True
+    else:
+        log.debug("metrics.instrument.skipped", reason="already instrumented in this process")
+
+    instrumentator.expose(app, endpoint="/metrics", include_in_schema=True, tags=["observability"])

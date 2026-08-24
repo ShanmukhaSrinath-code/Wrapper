@@ -837,3 +837,111 @@ $ trivy image common-app-base:local --severity HIGH,CRITICAL --ignore-unfixed
   EXIT CODE: 0
 ```
 
+## Phase 12 — Testing (pytest + Playwright) — **PASS**
+
+**Built:** 116 tests across three layers.
+
+- **Unit** (`tests/unit/`) — settings and derived DSNs, the `Secrets`
+  interface, the `Storage` *contract* exercised through an in-memory fake
+  (the payoff of depending on the interface: no MinIO, no network, no
+  credentials), correlation context, request-id validation against hostile
+  input, the error schema, security headers and the CORS guard, and the auth
+  seam.
+- **Integration** (`tests/integration/`) — two suites. `test_api.py` drives the
+  **containerised** app over HTTP; `test_inprocess_api.py` drives the *same*
+  app object through an ASGI transport against the real Postgres/Redis/MinIO.
+  `test_correlation_stores.py` re-checks the Correlation Contract against Loki
+  and Prometheus.
+- **E2E** (`tests/e2e/`) — Playwright, headless Chromium: Swagger UI renders,
+  the strict CSP does not break it, "Try it out" reaches the live API, and the
+  browser can read `X-Request-ID`.
+
+Integration and e2e tests **skip with a reason** when the stack is down, so a
+missing stack can never masquerade as a passing suite.
+
+### Bug 1 (found by the gate) — duplicate `X-Request-ID` header
+
+`test_expected_error_returns_404_in_the_same_schema` failed with
+`'02ffcff2-…, 02ffcff2-…'`. On *handled* errors both the error renderer and the
+correlation middleware stamped the header, and the middleware used `append`.
+Only handled errors were affected, which is exactly the kind of thing manual
+curl checks miss. Fixed by switching the middleware to `MutableHeaders.setdefault`.
+
+### Bug 2 (found by the gate) — `make test` deadlocked
+
+Unit and e2e suites each passed alone but hung together: pytest-playwright's
+**sync** fixtures cannot run inside the event loop `asyncio_mode = auto`
+creates. Rewrote the e2e suite on `playwright.async_api` with deliberately
+function-scoped fixtures — a session-scoped browser binds its driver
+subprocess to one loop and *deadlocks* rather than failing.
+
+### Bug 3 (found by the gate) — `create_app()` could only be called once
+
+Building a second app died on the first request with
+`DuplicateTimeseries: {'http_requests_inprogress'}` — Prometheus collectors are
+process-global. A template whose factory cannot run twice breaks every
+consumer's test suite. `configure_metrics` now instruments once per process and
+later apps reuse the existing collectors.
+
+### Bug 4 (found by the gate) — a Grafana panel had been silently broken
+
+Chasing Bug 3 revealed the in-flight gauge is named `http_requests_inprogress`:
+the instrumentator does **not** apply `metric_namespace` to it. The dashboard
+queried `app_http_requests_inprogress`, so the "Requests in flight" panel had
+been showing *No data* since Phase 6 — my Phase 6 gate checked the other panel
+queries but not that one. Fixed by naming the gauge explicitly.
+
+```
+$ curl -s localhost:8000/metrics | grep inprogress
+# TYPE app_http_requests_inprogress gauge
+app_http_requests_inprogress{handler="/demo/cached",method="GET"} 0.0
+
+$ curl -G localhost:9090/api/v1/query --data-urlencode 'query=sum(app_http_requests_inprogress)'
+  result: [{'metric': {}, 'value': [1787561153.542, '0']}]     # was: NO DATA
+```
+
+### Gate — `make test` runs everything green, above the coverage threshold
+
+```
+$ make test
+uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=80
+........................................................................ [ 62%]
+............................................                             [100%]
+
+Name                            Stmts   Miss  Cover
+-------------------------------------------------------------
+app\api\files.py                   73     15    79%
+app\api\health.py                  43      6    86%
+app\audit\writer.py                18      3    83%
+app\cache\client.py                40      4    90%
+app\config.py                     104      3    97%
+app\db\session.py                  35      1    97%
+app\errors.py                      89     12    87%
+app\jobs\celery_app.py             45     17    62%
+app\jobs\tasks.py                  30     15    50%
+app\main.py                        49     10    80%
+app\middleware\correlation.py      69      8    88%
+app\middleware\security.py         71      7    90%
+app\observability.py               64     19    70%
+app\storage\minio.py               67     23    66%
+-------------------------------------------------------------
+TOTAL                            1077    143    87%
+
+19 files skipped due to complete coverage.
+Required test coverage of 80% reached. Total coverage: 86.72%
+116 passed in 34.45s
+```
+
+Playwright headless, run separately for clarity:
+
+```
+$ uv run pytest tests/e2e -q
+......                                                                   [100%]
+```
+
+**On the residual gaps.** `app/jobs/tasks.py` (50%) and `celery_app.py` (62%)
+are executed by the *worker container*, so their bodies are invisible to
+coverage even though `test_enqueue_and_poll` proves they run. `storage/minio.py`
+(66%) is missing its error-mapping branches. These are honest gaps, not
+excluded from measurement to flatter the number.
+

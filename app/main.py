@@ -13,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__, cache, storage
-from app.api import demo, files, health
+from app.api import demo, docs, files, health
 from app.config import Settings, settings
 from app.db import session as db_session
 from app.errors import configure_sentry, register_exception_handlers
@@ -75,8 +75,10 @@ def create_app(config: Settings | None = None) -> FastAPI:
         title=config.app_name,
         version=__version__,
         description="Common Application Base — clone this and add business logic.",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        # Docs are served by app/api/docs.py instead, so the inline Swagger
+        # bootstrap script can be pinned by hash under a strict CSP.
+        docs_url=None,
+        redoc_url=None,
         openapi_url="/openapi.json",
         lifespan=lifespan,
     )
@@ -109,6 +111,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
     health.register_readiness_check("storage", storage.ping)
 
     # --- routers -------------------------------------------------------------
+    app.include_router(docs.router)
     app.include_router(health.router)
     app.include_router(demo.router)
     app.include_router(files.router)

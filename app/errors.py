@@ -67,7 +67,7 @@ class ConflictError(AppError):
 
 
 class ValidationError(AppError):
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     error_code = "validation_error"
 
 
@@ -79,7 +79,7 @@ class PermissionDeniedError(AppError):
 
 
 class PayloadTooLargeError(AppError):
-    status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    status_code = status.HTTP_413_CONTENT_TOO_LARGE
     error_code = "payload_too_large"
 
 
@@ -142,7 +142,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             error_count=len(exc.errors()),
         )
         return _render(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
             "validation_error",
             "The request body or parameters failed validation.",
             detail=exc.errors(),

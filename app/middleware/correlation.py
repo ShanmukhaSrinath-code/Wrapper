@@ -22,6 +22,7 @@ import uuid
 from collections.abc import Callable
 
 from opentelemetry import trace
+from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp
 
@@ -86,10 +87,13 @@ class CorrelationMiddleware:
                 nonlocal status_code
                 if message["type"] == "http.response.start":
                     status_code = message["status"]
-                    headers = message.setdefault("headers", [])
-                    headers.append((REQUEST_ID_HEADER.lower().encode(), request_id.encode()))
+                    # setdefault, not append: the error renderer in app.errors
+                    # already stamps X-Request-ID on responses it builds, and a
+                    # blind append emits the header twice.
+                    headers = MutableHeaders(scope=message)
+                    headers.setdefault(REQUEST_ID_HEADER, request_id)
                     if trace_id:
-                        headers.append((TRACE_ID_HEADER.lower().encode(), trace_id.encode()))
+                        headers.setdefault(TRACE_ID_HEADER, trace_id)
                 await send(message)
 
             try:
