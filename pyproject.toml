@@ -1,0 +1,114 @@
+[project]
+name = "common-app-base"
+version = "0.1.0"
+description = "Reusable FastAPI Common Application Base - observability, storage, jobs and correlation built in."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+
+dependencies = [
+  # --- web ---
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.32.0",
+  "python-multipart>=0.0.12",
+  # --- config ---
+  "pydantic>=2.9.0",
+  "pydantic-settings>=2.6.0",
+  # --- db ---
+  "sqlalchemy[asyncio]>=2.0.36",
+  "asyncpg>=0.30.0",
+  "alembic>=1.14.0",
+  "greenlet>=3.1.0",
+  # --- cache ---
+  "redis>=5.2.0",
+  # --- logging ---
+  "structlog>=24.4.0",
+  # --- metrics ---
+  "prometheus-fastapi-instrumentator>=7.0.0",
+  # --- tracing ---
+  "opentelemetry-sdk>=1.28.0",
+  "opentelemetry-api>=1.28.0",
+  "opentelemetry-exporter-otlp-proto-http>=1.28.0",
+  "opentelemetry-instrumentation-fastapi>=0.49b0",
+  "opentelemetry-instrumentation-sqlalchemy>=0.49b0",
+  "opentelemetry-instrumentation-redis>=0.49b0",
+  "opentelemetry-instrumentation-celery>=0.49b0",
+  # --- errors ---
+  "sentry-sdk[fastapi]>=2.18.0",
+  # --- storage ---
+  "boto3>=1.35.0",
+  # --- jobs ---
+  "celery[redis]>=5.4.0",
+]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.8.0",
+  "mypy>=1.13.0",
+  "pre-commit>=4.0.0",
+  "pytest>=8.3.0",
+  "pytest-asyncio>=0.24.0",
+  "pytest-cov>=6.0.0",
+  "httpx>=0.28.0",
+  "playwright>=1.49.0",
+  "pytest-playwright>=0.6.0",
+  "types-requests",
+  "boto3-stubs[s3]",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+# ----------------------------------------------------------------------------
+# ruff
+# ----------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "ASYNC", "S", "RUF"]
+ignore = [
+  "S104",  # binding to 0.0.0.0 is intentional inside containers
+  "B008",  # FastAPI Depends() in defaults is the framework idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S311"]
+"scripts/**" = ["S101", "S603", "S607"]
+
+# ----------------------------------------------------------------------------
+# mypy
+# ----------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+warn_unused_configs = true
+warn_redundant_casts = true
+disallow_untyped_defs = true
+exclude = '^(migrations/|tests/|\.venv/)'
+
+# ----------------------------------------------------------------------------
+# pytest
+# ----------------------------------------------------------------------------
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "integration: requires the docker compose stack to be running",
+  "e2e: playwright browser test",
+]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/jobs/worker_entrypoint.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
