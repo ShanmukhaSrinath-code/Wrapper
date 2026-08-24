@@ -119,3 +119,56 @@ $ docker images common-app-base:local
 common-app-base:local  412MB
 ```
 
+## Phase 3 — PostgreSQL + migrations — **PASS**
+
+**Built:** `postgres:16-alpine` in compose (healthcheck + named volume);
+`app/db/base.py` (`DeclarativeBase` with an explicit constraint naming
+convention so autogenerate emits stable names, plus `UUIDPrimaryKeyMixin` /
+`TimestampMixin`); `app/db/session.py` (lazily-built async engine with
+`pool_pre_ping`, the `DbSession` dependency that commits on success and rolls
+back on error, `ping()` and `dispose_engine()`); `app/db/models/example.py`;
+Alembic (`alembic.ini`, `migrations/env.py` reading the DSN from
+`app.config.settings` — never from the ini — and running through the async
+engine) and the initial migration. `/health/ready` now pings Postgres.
+
+### Gate 1 — `alembic upgrade head`
+
+```
+$ make revision m="initial example table"
+INFO  [alembic.autogenerate.compare.tables] Detected added table 'example'
+INFO  [alembic.autogenerate.compare.constraints] Detected added index 'ix_example_name' on '('name',)'
+Generating migrations/versions/20260824_1132_initial_example_table.py ... done
+
+$ make migrate
+INFO  [alembic.runtime.migration] Running upgrade  -> 375b31581a92, initial example table
+```
+
+### Gate 2 — scripted insert + select round-trips
+
+```
+ping(): True
+inserted id  : e6163c01-2ac3-45dc-a258-56ac25cb378b
+selected id  : e6163c01-2ac3-45dc-a258-56ac25cb378b
+name         : phase-3-check
+description  : scripted insert+select
+created_at   : 2026-08-24 06:03:03.935775+00:00
+round-trip OK: True
+```
+
+### Gate 3 — readiness reports the DB, and *actually* fails when it is down
+
+```
+$ curl localhost:8000/health/ready
+{"status":"ok","service":"common-app-base","checks":{"postgres":"ok"}}   HTTP 200
+
+$ docker stop cab-postgres && curl localhost:8000/health/ready
+{"status":"degraded","service":"common-app-base","checks":{"postgres":"error: timeout after 3s"}}
+HTTP 503
+
+$ curl localhost:8000/health/live          # liveness must NOT follow the DB down
+{"status":"ok","service":"common-app-base","version":"0.1.0"}            HTTP 200
+
+$ docker start cab-postgres && curl localhost:8000/health/ready
+{"status":"ok","service":"common-app-base","checks":{"postgres":"ok"}}   HTTP 200
+```
+
