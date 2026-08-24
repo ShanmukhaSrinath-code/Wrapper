@@ -113,7 +113,14 @@ markers = [
 
 [tool.coverage.run]
 source = ["app"]
-omit = ["app/jobs/worker_entrypoint.py"]
+omit = [
+    "app/jobs/worker_entrypoint.py",
+    # Discovery tests write throwaway plugins into the seam and delete them
+    # again; coverage would otherwise warn about parsing files that no longer
+    # exist by the time it reports.
+    "app/services/_*",
+    "app/services/_*/*",
+]
 
 [tool.coverage.report]
 show_missing = true

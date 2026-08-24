@@ -178,6 +178,10 @@ def load_tasks() -> list[str]:
     from app.core.discovery import import_discovered_tasks
 
     modules = import_discovered_tasks()
+    # Mark the lazy loader satisfied so a later enqueue does not repeat the walk.
+    import app.jobs as jobs_pkg
+
+    jobs_pkg._tasks_loaded = True
     log.info("celery.tasks_loaded", module_count=len(modules), modules=modules)
     return modules
 
