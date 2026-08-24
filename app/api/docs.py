@@ -88,13 +88,13 @@ async def swagger_ui() -> HTMLResponse:
         title=f"{settings.app_name} — API",
         oauth2_redirect_url="/docs/oauth2-redirect",
     )
-    return _render(html.body.decode("utf-8"))
+    return _render(bytes(html.body).decode("utf-8"))
 
 
 @router.get("/docs/oauth2-redirect")
 async def swagger_ui_redirect() -> HTMLResponse:
     html = get_swagger_ui_oauth2_redirect_html()
-    return _render(html.body.decode("utf-8"))
+    return _render(bytes(html.body).decode("utf-8"))
 
 
 @router.get("/redoc")
@@ -104,4 +104,4 @@ async def redoc() -> HTMLResponse:
         title=f"{settings.app_name} — API",
         with_google_fonts=False,
     )
-    return _render(html.body.decode("utf-8"), allow_worker_blob=True)
+    return _render(bytes(html.body).decode("utf-8"), allow_worker_blob=True)

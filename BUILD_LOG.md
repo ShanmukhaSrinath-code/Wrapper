@@ -945,3 +945,115 @@ coverage even though `test_enqueue_and_poll` proves they run. `storage/minio.py`
 (66%) is missing its error-mapping branches. These are honest gaps, not
 excluded from measurement to flatter the number.
 
+## Phase 13 — CI/CD + Kubernetes — **PASS**
+
+**Built:** `.github/workflows/ci.yml` — `lint → test → scan → build → deploy`,
+where each stage gates the next. `deploy/k8s/` — Namespace (with the
+`restricted` Pod Security Standard), ConfigMap, Secret, two Deployments (API +
+worker), Service, HPA, PodDisruptionBudget, NetworkPolicy, and a
+`kustomization.yaml`.
+
+Choices worth stating:
+
+- **The image is built, scanned, then pushed — in that order.** The build job
+  loads the image locally, runs Trivy against it, smoke-tests it (including
+  that `X-Request-ID` is present in the shipped artefact), and only then logs in
+  and pushes. A failing scan cannot produce a pushed image.
+- **Tests run against real Postgres, Redis and MinIO** as GitHub service
+  containers, not mocks.
+- **Three probes, three different jobs.** `startupProbe` gates the others so a
+  slow boot is not read as a crash loop; `livenessProbe` hits `/health/live`
+  and touches **no** dependency, so a slow database cannot get healthy pods
+  killed and escalate a partial outage into a total one; `readinessProbe` hits
+  `/health/ready`, which *does* check dependencies, so a pod that cannot reach
+  its backing services leaves the Service instead of serving errors.
+- **Memory is limited, CPU is not.** CPU throttling hurts tail latency more
+  than it protects neighbours; memory is not compressible, so it is capped.
+- **The Secret contains placeholders only**, with the swap to External
+  Secrets / Sealed Secrets / the Key Vault CSI driver documented in-file.
+
+### Bug found by this phase — 10 real type errors
+
+`mypy` had never actually been run (it is in the Makefile and now in CI, but no
+previous gate invoked it). It found ten genuine errors: the correlation
+middleware was annotated with bare `dict`/`Callable` instead of the ASGI
+`Scope`/`Receive`/`Send` types; `Response.body` is `bytes | memoryview` and was
+being `.decode()`d directly; `_NullSpanExporter` did not actually implement
+`SpanExporter`; and `build_cors_kwargs` returned `dict[str, object]`, which
+cannot be splatted into `add_middleware`. All fixed properly — a `TypedDict`
+for the CORS kwargs, real ASGI types, `bytes(...)` coercion, and a genuine
+`SpanExporter` subclass — rather than silenced with `type: ignore`.
+
+```
+$ make typecheck
+uv run mypy app
+Success: no issues found in 33 source files
+```
+
+### Gate 1 — lint + test + scan run clean locally
+
+```
+$ make lint
+All checks passed!
+uv run ruff format --check .
+50 files already formatted
+
+$ make typecheck
+Success: no issues found in 33 source files
+
+$ make test
+116 passed in 42.31s
+Required test coverage of 80% reached. Total coverage: 86.81%
+
+$ trivy fs .        -> 0 findings, exit 0     (recorded in Phase 11)
+$ trivy image ...   -> 0 HIGH/CRITICAL, exit 0
+```
+
+Workflow structure parses and the dependency graph is correct:
+
+```
+  jobs: ['lint', 'test', 'scan', 'build', 'deploy']
+    lint     needs=-                steps=6
+    test     needs=lint             steps=11
+    scan     needs=lint             steps=4
+    build    needs=['test','scan']  steps=8
+    deploy   needs=build            steps=3
+```
+
+`act` is not installed on this host, so the stages were run directly (above)
+rather than in a simulated runner.
+
+### Gate 2 — manifests render and validate
+
+`kubectl apply --dry-run=client` needs API discovery and hangs with no cluster
+context configured, so validation is done by rendering plus **offline** schema
+validation with `kubeconform`, which is stricter than a client dry-run:
+
+```
+$ kubectl kustomize deploy/k8s
+rendered 9 resources:
+kind: Namespace                name: common-app-base
+kind: ConfigMap                name: common-app-base-config
+kind: Secret                   name: common-app-base-secrets
+kind: Service                  name: common-app-base
+kind: Deployment               name: common-app-base
+kind: Deployment               name: common-app-base-worker
+kind: PodDisruptionBudget      name: common-app-base
+kind: HorizontalPodAutoscaler  name: common-app-base
+kind: NetworkPolicy            name: common-app-base
+
+$ kubectl kustomize deploy/k8s | kubeconform -strict -summary -kubernetes-version 1.31.0 -
+Summary: 9 resources found parsing stdin - Valid: 9, Invalid: 0, Errors: 0, Skipped: 0
+```
+
+### Gate 3 — the probes point at the health endpoints
+
+```
+  common-app-base:
+     startupProbe    -> /health/live
+     livenessProbe   -> /health/live
+     readinessProbe  -> /health/ready
+  common-app-base-worker:
+     livenessProbe   -> celery ... inspect ping
+```
+

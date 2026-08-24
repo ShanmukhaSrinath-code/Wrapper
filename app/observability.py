@@ -7,11 +7,18 @@ code runs in tests and in production.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.sdk.resources import SERVICE_NAME, SERVICE_VERSION, Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
+    SimpleSpanProcessor,
+    SpanExporter,
+    SpanExportResult,
+)
 
 from app import __version__
 from app.config import Settings
@@ -66,12 +73,14 @@ def configure_tracing(config: Settings) -> None:
     _tracing_configured = True
 
 
-class _NullSpanExporter:
-    """Drops spans. Keeps the provider valid without shipping anything."""
+class _NullSpanExporter(SpanExporter):
+    """Drops spans. Keeps the provider valid without shipping anything.
 
-    def export(self, spans: object) -> int:
-        from opentelemetry.sdk.trace.export import SpanExportResult
+    Spans are still created, so `trace_id` is real and log correlation works
+    even when no collector is configured.
+    """
 
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         return SpanExportResult.SUCCESS
 
     def shutdown(self) -> None:

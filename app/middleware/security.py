@@ -13,6 +13,8 @@ calling out:
 
 from __future__ import annotations
 
+from typing import TypedDict
+
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -55,6 +57,17 @@ DOCS_CSP = (
 )
 
 _DOCS_PATHS = frozenset({"/docs", "/redoc", "/docs/oauth2-redirect"})
+
+
+class CorsKwargs(TypedDict):
+    """Exactly what `CORSMiddleware.__init__` accepts, so `**kwargs` type-checks."""
+
+    allow_origins: list[str]
+    allow_credentials: bool
+    allow_methods: list[str]
+    allow_headers: list[str]
+    expose_headers: list[str]
+    max_age: int
 
 
 def apply_security_headers(
@@ -184,7 +197,7 @@ class RequestSizeLimitMiddleware:
         await send({"type": "http.response.body", "body": body.encode()})
 
 
-def build_cors_kwargs(config: Settings) -> dict[str, object]:
+def build_cors_kwargs(config: Settings) -> CorsKwargs:
     """CORS settings, with the one combination browsers reject ruled out.
 
     `allow_origins=["*"]` together with `allow_credentials=True` is rejected by
@@ -200,18 +213,19 @@ def build_cors_kwargs(config: Settings) -> dict[str, object]:
             "(browsers reject credentialed requests against a wildcard origin)."
         )
 
-    return {
-        "allow_origins": origins,
-        "allow_credentials": allow_credentials,
-        "allow_methods": config.cors_methods_list,
-        "allow_headers": config.cors_headers_list,
-        "expose_headers": ["X-Request-ID", "X-Trace-ID"],
-        "max_age": 600,
-    }
+    return CorsKwargs(
+        allow_origins=origins,
+        allow_credentials=allow_credentials,
+        allow_methods=config.cors_methods_list,
+        allow_headers=config.cors_headers_list,
+        expose_headers=["X-Request-ID", "X-Trace-ID"],
+        max_age=600,
+    )
 
 
 __all__ = [
     "BASE_SECURITY_HEADERS",
+    "CorsKwargs",
     "RequestSizeLimitMiddleware",
     "SecurityHeadersMiddleware",
     "apply_security_headers",

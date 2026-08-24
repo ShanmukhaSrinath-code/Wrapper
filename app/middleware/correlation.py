@@ -19,12 +19,11 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Callable
 
 from opentelemetry import trace
 from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
-from starlette.types import ASGIApp
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.logging import bind_request_context, clear_request_context, get_logger
 
@@ -53,7 +52,7 @@ class CorrelationMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:  # type: ignore[type-arg]
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -79,11 +78,11 @@ class CorrelationMiddleware:
             _tag_sentry(request_id, trace_id)
 
             # The route handler needs the id for error payloads and audit rows.
-            scope.setdefault("state", {})
-            scope["state"]["request_id"] = request_id
-            scope["state"]["trace_id"] = trace_id
+            state = scope.setdefault("state", {})
+            state["request_id"] = request_id
+            state["trace_id"] = trace_id
 
-            async def send_with_headers(message: dict) -> None:  # type: ignore[type-arg]
+            async def send_with_headers(message: Message) -> None:
                 nonlocal status_code
                 if message["type"] == "http.response.start":
                     status_code = message["status"]

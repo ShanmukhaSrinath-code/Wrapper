@@ -1,0 +1,71 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: common-app-base
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: common-app-base
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # HTTP from the ingress controller, and metrics scrapes from Prometheus.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 8000
+
+  egress:
+    # DNS, or nothing else resolves.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Backing services.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: data
+      ports:
+        - protocol: TCP
+          port: 5432    # postgres
+        - protocol: TCP
+          port: 6379    # redis
+        - protocol: TCP
+          port: 9000    # minio
+
+    # Telemetry export (OTLP to Tempo).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 4318
+
+    # HTTPS out, for Sentry. Narrow this to an egress gateway if you have one.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443

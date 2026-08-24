@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: common-app-base
+  labels:
+    app.kubernetes.io/name: common-app-base
+    # Enforce the restricted Pod Security Standard: the manifests already run
+    # non-root with a read-only root filesystem and all capabilities dropped,
+    # so this is a guard rail rather than a change in behaviour.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

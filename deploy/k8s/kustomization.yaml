@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Render with:   kubectl kustomize deploy/k8s
+# Validate with: kubectl apply --dry-run=client -k deploy/k8s
+# Apply with:    kubectl apply -k deploy/k8s
+
+namespace: common-app-base
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: common-app-base
+      app.kubernetes.io/managed-by: kustomize
+
+images:
+  # CI overrides the tag:
+  #   kustomize edit set image ghcr.io/OWNER/common-app-base=ghcr.io/org/app:<sha>
+  - name: ghcr.io/OWNER/common-app-base
+    newTag: latest
