@@ -131,6 +131,8 @@ def configure_metrics(app: FastAPI, config: Settings) -> None:
         inprogress_labels=True,
     ).instrument(
         app,
+        # Namespace only. The library's metric names already start with `http_`,
+        # so adding a subsystem would yield `app_http_http_requests_total`.
         metric_namespace="app",
-        metric_subsystem="http",
+        metric_subsystem="",
     ).expose(app, endpoint="/metrics", include_in_schema=True, tags=["observability"])

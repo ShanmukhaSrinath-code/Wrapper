@@ -300,3 +300,75 @@ status: success | streams: 1
   request_id=2c42c583-0453-42ed-af83-e34d15679744 trace_id=36ad1040e7ad5b41d35aba81d0929172 event=request.completed status=200
 ```
 
+## Phase 6 — Metrics (Prometheus) + Grafana dashboard — **PASS**
+
+**Built:** `configure_metrics()` exposing `/metrics` via
+`prometheus-fastapi-instrumentator`; `prom/prometheus:v3.1.0` in compose
+scraping `app:8000` every 15s; a provisioned Grafana dashboard
+(`common-app-base`) with request rate, error rate, latency p50/p95/p99,
+responses by status, in-flight, total, target-up — **plus a `request_id`
+textbox variable driving a Loki logs panel**, so metrics and logs sit on one
+screen keyed by the same id.
+
+**Cardinality note.** Metrics are labelled `handler`/`method`/`status` only.
+Correlation ids are deliberately *not* labels — they are unbounded and would
+blow up cardinality. Ids live in logs and traces; metrics stay aggregate.
+`should_ignore_untemplated=True` likewise keeps unrouted 404 paths from
+creating a series per URL.
+
+**Bug found and fixed during the gate.** Metrics first appeared as
+`app_http_http_requests_total` — namespace `app` + subsystem `http` on top of
+library names that already begin with `http_`. Dropped the subsystem.
+
+### Gate 1 — `/metrics` returns Prometheus text
+
+```
+$ curl -s localhost:8000/metrics | grep ^app_http
+app_http_requests_total{handler="/demo/cached",method="GET",status="200"} 25.0
+app_http_request_duration_seconds_bucket{handler="/demo/cached",le="0.1",method="GET"} 20.0
+app_http_request_duration_seconds_bucket{handler="/demo/cached",le="0.5",method="GET"} 25.0
+app_http_request_duration_seconds_bucket{handler="/demo/cached",le="+Inf",method="GET"} 25.0
+```
+
+### Gate 2 — Prometheus Targets shows the app UP
+
+```
+$ curl -s "localhost:9090/api/v1/targets?state=active"
+  common-app-base      http://app:8000/metrics          health=UP  lastError=-
+  loki                 http://loki:3100/metrics         health=UP  lastError=-
+  prometheus           http://localhost:9090/metrics    health=UP  lastError=-
+```
+
+### Gate 3 — the dashboard shows traffic after generating requests
+
+272 requests over ~50s spanning several scrape intervals:
+
+```
+=== request rate by handler ===
+  /demo/cached           1.295 req/s
+=== latency percentiles ===
+  p50 = 0.0507s
+  p95 = 0.0964s
+  p99 = 0.2280s
+=== by status code ===
+  status 200: 1.295 req/s
+```
+
+### Gate 4 — dashboard is provisioned and its panels query successfully
+
+```
+$ curl -u admin:admin "localhost:3001/api/search?type=dash-db"
+  uid=common-app-base    title=Common Application Base — Service Overview  folder=Common Application Base
+
+  [timeseries] Request rate (req/s by route)
+  [timeseries] Error rate (5xx as % of all requests)
+  [timeseries] Latency p50 / p95 / p99
+  [timeseries] Responses by status code
+  [stat      ] Requests in flight / Total requests (30m) / Target up
+  [logs      ] Logs for $request_id (blank = all app logs)
+
+$ curl -u admin:admin .../api/datasources/proxy/uid/prometheus/api/v1/query
+  status: success
+  /demo/cached: 1.295 req/s
+```
+
