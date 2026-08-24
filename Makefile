@@ -18,6 +18,9 @@ help: ## Show this help
 install: ## Create the venv and install all dependencies
 	$(UV) python install 3.12
 	$(UV) sync --all-groups
+	@# `uv sync` can report success over a venv a previous run left broken, so
+	@# verify the interpreter and key imports before claiming the install worked.
+	$(PY) python scripts/verify_venv.py
 
 lint: ## ruff check + format check
 	$(PY) ruff check .
