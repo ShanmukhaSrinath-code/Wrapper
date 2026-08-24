@@ -11,11 +11,12 @@ import asyncio
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import cache
 from app.audit import write_audit
 from app.errors import NotFoundError
+from app.jobs.tasks import always_fails, slow_add
 from app.logging import current_request_id, current_trace_id
 from app.security.current_user import CurrentUser
 
@@ -114,3 +115,50 @@ async def boom(user: CurrentUser) -> dict[str, Any]:
 async def not_found(user: CurrentUser) -> dict[str, Any]:
     """An *expected* failure: 404 in the same error schema, warned not paged."""
     raise NotFoundError("No such demo resource.", detail={"looked_for": "nothing"})
+
+
+class JobAccepted(BaseModel):
+    task_id: str
+    status: str
+    request_id: str | None
+
+
+class JobStatus(BaseModel):
+    task_id: str
+    status: str = Field(description="PENDING, STARTED, SUCCESS, FAILURE, ...")
+    result: Any | None = None
+    error: str | None = None
+
+
+@router.post("/job", response_model=JobAccepted, status_code=202, summary="Enqueue a job")
+async def enqueue_job(
+    user: CurrentUser,
+    a: int = Query(default=2),
+    b: int = Query(default=3),
+    delay_seconds: float = Query(default=2.0, ge=0, le=30),
+    fail: bool = Query(default=False, description="Enqueue a task that always fails."),
+) -> JobAccepted:
+    """Enqueue and return immediately.
+
+    The correlation ids ride along on the message headers, so the worker logs
+    under this request's `request_id` -- see app/jobs/celery_app.py.
+    """
+    task = always_fails.delay() if fail else slow_add.delay(a, b, delay_seconds)
+    return JobAccepted(task_id=task.id, status="queued", request_id=current_request_id())
+
+
+@router.get("/job/{task_id}", response_model=JobStatus, summary="Poll job status")
+async def job_status(task_id: str, user: CurrentUser) -> JobStatus:
+    """Return the task's state and, once finished, its result or error."""
+    from celery.result import AsyncResult
+
+    from app.jobs import celery_app
+
+    async_result = AsyncResult(task_id, app=celery_app)
+    state = async_result.state
+
+    if state == "FAILURE":
+        return JobStatus(task_id=task_id, status=state, error=str(async_result.result))
+    if state == "SUCCESS":
+        return JobStatus(task_id=task_id, status=state, result=async_result.result)
+    return JobStatus(task_id=task_id, status=state)

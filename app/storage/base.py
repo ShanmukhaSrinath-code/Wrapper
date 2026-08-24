@@ -1,8 +1,8 @@
 """The object-storage interface.
 
-Application code depends on :class:`Storage` and never on boto3, MinIO or the
-Azure SDK. Swapping providers is then a config change (`STORAGE_PROVIDER`) and
-not a rewrite -- see `azure_blob.py` for the second adapter.
+Application code depends on :class:`Storage` and never on boto3 directly. That
+keeps the object store faked in unit tests and replaceable without touching a
+single call site.
 
 The contract deals in **keys and bytes**. Blobs never go into Postgres; the
 database stores the key, and the object store owns the content.

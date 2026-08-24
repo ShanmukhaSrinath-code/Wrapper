@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = 60
 
     # --- object storage ------------------------------------------------------
-    storage_provider: Literal["minio", "azure_blob"] = "minio"
+    storage_provider: Literal["minio"] = "minio"
     s3_endpoint_url: str = "http://localhost:9000"
     s3_public_endpoint_url: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"

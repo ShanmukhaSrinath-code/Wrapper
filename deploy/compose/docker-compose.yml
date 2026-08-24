@@ -117,6 +117,30 @@ services:
       loki:
         condition: service_healthy
 
+  # ------------------------------------------------------------ worker ------
+  worker:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: common-app-base:local
+    container_name: cab-worker
+    restart: unless-stopped
+    command: ["celery", "-A", "app.jobs.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.jobs.celery_app:celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
   # ------------------------------------------------------------- minio ------
   minio:
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z

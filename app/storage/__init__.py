@@ -1,7 +1,8 @@
 """Object storage.
 
-Import :func:`get_storage` and the interface types. Never import an adapter
-directly -- that is what keeps the provider swappable.
+Import :func:`get_storage` and the interface types. Never import the adapter
+directly -- depending on the :class:`Storage` interface is what keeps this
+layer testable (a fake in unit tests) and replaceable later.
 """
 
 from __future__ import annotations
@@ -28,13 +29,8 @@ __all__ = [
 
 @functools.lru_cache(maxsize=1)
 def get_storage(config: Settings | None = None) -> Storage:
-    """Return the configured storage adapter (process-wide singleton)."""
+    """Return the storage adapter (process-wide singleton)."""
     config = config or settings
-
-    if config.storage_provider == "azure_blob":
-        from app.storage.azure_blob import AzureBlobStorage
-
-        return AzureBlobStorage(config)
 
     from app.storage.minio import MinioStorage
 
@@ -42,5 +38,5 @@ def get_storage(config: Settings | None = None) -> Storage:
 
 
 async def ping() -> bool:
-    """Readiness probe for the configured object store."""
+    """Readiness probe for the object store."""
     return await get_storage().ping()

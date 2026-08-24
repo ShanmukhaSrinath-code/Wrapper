@@ -1,0 +1,135 @@
+"""Celery application and correlation propagation.
+
+The hard part of a job system is not running work off-request -- it is not
+losing the thread when you do. A task enqueued by request X must log under
+request X, otherwise the moment work goes async your correlation story stops.
+
+So this module:
+
+1. attaches the current `request_id`/`trace_id` to every message as a **header**
+   when a task is published (`before_task_publish`), and
+2. binds those ids into structlog inside the worker before the task body runs
+   (`task_prerun`), clearing them afterwards (`task_postrun`).
+
+Nothing in a task body has to know about any of this.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from celery import Celery
+from celery.signals import (
+    before_task_publish,
+    setup_logging,
+    task_failure,
+    task_postrun,
+    task_prerun,
+)
+
+from app.config import settings
+from app.logging import (
+    bind_request_context,
+    clear_request_context,
+    configure_logging,
+    current_request_id,
+    current_trace_id,
+    get_logger,
+)
+
+log = get_logger(__name__)
+
+REQUEST_ID_HEADER = "x_request_id"
+TRACE_ID_HEADER = "x_trace_id"
+
+celery_app = Celery(
+    "common-app-base",
+    broker=settings.broker_url,
+    backend=settings.result_backend,
+    include=["app.jobs.tasks"],
+)
+
+celery_app.conf.update(
+    task_serializer="json",
+    result_serializer="json",
+    accept_content=["json"],
+    timezone="UTC",
+    enable_utc=True,
+    # Ack after the task finishes, so a worker crash re-queues rather than
+    # silently dropping the job.
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+    result_expires=3600,
+    task_track_started=True,
+    task_time_limit=300,
+    task_soft_time_limit=270,
+    broker_connection_retry_on_startup=True,
+)
+
+
+@setup_logging.connect
+def _configure_worker_logging(**_: Any) -> None:
+    """Use our structlog pipeline in the worker, not Celery's own format.
+
+    Without this the worker would emit plain text that Promtail cannot parse
+    into correlated fields.
+    """
+    configure_logging()
+
+
+@before_task_publish.connect
+def _propagate_context(headers: dict[str, Any] | None = None, **_: Any) -> None:
+    """Copy the caller's correlation ids onto the outgoing message."""
+    if headers is None:
+        return
+    request_id = current_request_id()
+    trace_id = current_trace_id()
+    if request_id:
+        headers[REQUEST_ID_HEADER] = request_id
+    if trace_id:
+        headers[TRACE_ID_HEADER] = trace_id
+
+
+@task_prerun.connect
+def _bind_context(task_id: str | None = None, task: Any = None, **_: Any) -> None:
+    """Rebind the originating ids inside the worker before the task runs."""
+    clear_request_context()
+    request = getattr(task, "request", None)
+    request_id = getattr(request, REQUEST_ID_HEADER, None) if request else None
+    trace_id = getattr(request, TRACE_ID_HEADER, None) if request else None
+
+    bind_request_context(
+        # Fall back to the Celery task id so a task published outside a request
+        # (a beat schedule, say) is still traceable to something.
+        request_id=request_id or f"task:{task_id}",
+        trace_id=trace_id,
+        task_id=task_id,
+        task_name=getattr(task, "name", None),
+    )
+    log.info("task.started", task_id=task_id, task_name=getattr(task, "name", None))
+
+
+@task_postrun.connect
+def _unbind_context(task_id: str | None = None, state: str | None = None, **_: Any) -> None:
+    log.info("task.finished", task_id=task_id, task_state=state)
+    clear_request_context()
+
+
+@task_failure.connect
+def _report_failure(
+    task_id: str | None = None, exception: BaseException | None = None, **_: Any
+) -> None:
+    """Log the failure with its ids and send it to Sentry, like an HTTP 500."""
+    log.error(
+        "task.failed",
+        task_id=task_id,
+        error=f"{type(exception).__name__}: {exception}" if exception else None,
+    )
+    try:
+        import sentry_sdk
+
+        if sentry_sdk.get_client().is_active() and exception is not None:
+            sentry_sdk.capture_exception(exception)
+    except Exception as exc:
+        log.debug("sentry.task_capture.failed", error=str(exc))

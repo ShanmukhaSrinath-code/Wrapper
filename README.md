@@ -40,13 +40,18 @@ Run `make help` for the full list.
 
 ## Swap points
 
-The template is local-first but cloud-swappable. Three seams are deliberately
+The template is local-first but cloud-swappable. Two seams are deliberately
 left as interfaces:
 
 | Seam | Local implementation | Production swap |
 |---|---|---|
 | Secrets | `EnvSecrets` (env vars) | `AzureKeyVaultSecrets` — set `SECRETS_PROVIDER=azure_key_vault` |
-| Object storage | `MinioStorage` (S3 API) | `AzureBlobStorage` — set `STORAGE_PROVIDER=azure_blob` |
 | Identity | `get_current_user()` stub principal | Entra ID + Casbin |
+
+Object storage is **MinIO** (S3 API). Call sites depend on the
+[`Storage`](app/storage/base.py) interface rather than on boto3, which keeps
+the object store faked in unit tests — and because MinIO speaks the S3 API,
+the same adapter works unchanged against real S3 by changing the endpoint
+and credentials.
 
 See [app/config.py](app/config.py) for the secrets interface.

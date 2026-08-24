@@ -637,3 +637,87 @@ http_path     | /files
 detail        | {"filename": "upload.txt", "size_bytes": 77, "storage_key": "...", "checksum_sha256": "d6702f62..."}
 ```
 
+> **Amendment (requested after Phase 9).** The `AzureBlobStorage` stub was
+> removed at the user's request — object storage is MinIO only. The `Storage`
+> interface stays, because it is what keeps call sites free of boto3 and lets
+> unit tests substitute a fake. MinIO speaks the S3 API, so the same adapter
+> also works against real S3 with a different endpoint.
+
+## Phase 10 — Background jobs (Celery) — **PASS**
+
+**Built:** `app/jobs/celery_app.py` (Redis broker + result backend,
+`task_acks_late` + `task_reject_on_worker_lost` so a worker crash re-queues
+rather than silently dropping a job); `app/jobs/tasks.py` (`slow_add`,
+`process_upload`, `always_fails`); a `worker` service in compose;
+`POST /demo/job` and `GET /demo/job/{id}`.
+
+**The correlation problem this phase actually solves.** The moment work goes
+off-request, naive setups lose the thread. Here `before_task_publish` copies
+`request_id`/`trace_id` onto the message headers, and `task_prerun` rebinds
+them into structlog inside the worker — so a task logs under the request that
+enqueued it, and no task body has to know. A task published outside a request
+(a beat schedule) falls back to `task:<task_id>`, so it is still traceable to
+something rather than to nothing.
+
+### Gate 1 — enqueue returns immediately
+
+```
+$ curl -D - -X POST "localhost:8000/demo/job?a=17&b=25&delay_seconds=4"
+HTTP/1.1 202 Accepted
+x-request-id: a7d92201-db1e-48bc-882b-10bc9f80dd6d
+{"task_id":"4a4fcdd4-...","status":"queued","request_id":"a7d92201-..."}
+
+  enqueue latency: 255ms   (the task itself sleeps 4000ms)
+```
+
+### Gate 2 — status endpoint reaches SUCCESS with the result
+
+```
+  t+1s: {"status":"STARTED","result":null}
+  t+2s: {"status":"STARTED","result":null}
+  t+3s: {"status":"STARTED","result":null}
+  t+4s: {"status":"SUCCESS","result":{"a":17,"b":25,"sum":42,
+          "task_id":"4a4fcdd4-...",
+          "request_id":"a7d92201-db1e-48bc-882b-10bc9f80dd6d",   <- the ENQUEUEING request
+          "trace_id":"97a50872bf21c7c1c38da6e843c565ac"}}
+```
+
+### Gate 3 — worker logs carry the originating `request_id`
+
+```
+$ docker logs cab-worker | grep a7d92201-db1e-48bc-882b-10bc9f80dd6d
+  event=task.started    request_id=a7d92201-...  task_id=4a4fcdd4..  logger=app.jobs.celery_app
+  event=slow_add.begin  request_id=a7d92201-...  task_id=4a4fcdd4..  logger=app.jobs.tasks
+  event=slow_add.done   request_id=a7d92201-...  task_id=4a4fcdd4..  logger=app.jobs.tasks
+  event=Task demo.slow_add[...] succeeded in 4.0169s  request_id=a7d92201-...  logger=celery.app.trace
+  event=task.finished   request_id=a7d92201-...  task_id=4a4fcdd4..  logger=app.jobs.celery_app
+
+the same id appears in BOTH containers:
+  cab-app:    1 lines
+  cab-worker: 5 lines
+```
+
+Note the fourth line: even *Celery's own* `celery.app.trace` logger carries the
+id, because stdlib logging is routed through the same structlog pipeline.
+
+### Gate 4 — failures are correlated too
+
+```
+$ curl -X POST "localhost:8000/demo/job?fail=true"     -> request_id=cc119b39-...
+  status: {"status":"FAILURE","error":"This task always fails, by design."}
+  worker log:
+    level=error event=task.failed  request_id=cc119b39-a690-4c1a-bed7-2c25cee3d232
+```
+
+### Gate 5 — a task can reach MinIO and Postgres
+
+```
+process_upload(file_id, storage_key) ->
+  {'file_id': '0f8be724-...', 'size_bytes': 77, 'line_count': 3, 'processed_by_task': 'add8a460-...'}
+
+audit row written by the worker:
+  action      | file.processed
+  request_id  | task:add8a460-aab8-47e5-af63-45395b69370f   <- no-HTTP-request fallback, as designed
+  detail      | {"size_bytes": 77, "line_count": 3, ...}
+```
+
