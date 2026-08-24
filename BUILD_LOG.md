@@ -1360,3 +1360,76 @@ The base delivers on its purpose. A new feature gets correlation, audit,
 metrics, structured logs, error shaping, security headers, tracing, OpenAPI and
 migrations **without writing any of them** — roughly 190 lines of business
 logic and two lines of wiring, live in under three minutes.
+
+
+---
+
+# REMEDIATION — SOLIDIFY_BRIEF.md
+
+**Verdict: READY.** Full evidence in [TEST_REPORT.md](TEST_REPORT.md); the
+baseline audit that prompted this work is preserved in
+[TEST_REPORT_BASELINE.md](TEST_REPORT_BASELINE.md).
+
+The independent audit of `22319b3` returned **NOT READY** on one zero-tolerance
+criterion: adding a feature required editing two protected base modules. Both
+causes were the same shape -- a hand-maintained registry that failed **silently**
+when a developer forgot it.
+
+## What changed, in one line each
+
+| Commit | Fix | Verification |
+|---|---|---|
+| `8e13069` | **fix-1** Celery tasks discovered, not listed; `enqueue()` refuses unregistered names; import errors are fatal | `probe.discovered` appears in the real worker's `[tasks]` with no list edited |
+| `228f9b7` | **fix-2** models discovered; autogenerate refuses `drop_*` without `ALLOW_DESTRUCTIVE=1` | deleting a model makes `make revision` exit 1 instead of emitting a drop |
+| `531fed9` | **fix-3** audit actor in a contextvar, bound by middleware, carried on Celery headers | task enqueued as `alice/[admin,ops]` wrote `actor_id=alice` without mentioning an actor |
+| `50b78d9` | **fix-4** statement-level TRUNCATE trigger + least-privilege runtime role | `TRUNCATE` and `DROP TRIGGER` both denied to the app role; triggers still fire for the owner |
+| `ab4e813` | **fix-5** cache outages degrade to a miss | Redis stopped: `/health/ready` 503, `/demo/cached` **200** |
+| `e215b1a` | **fix-6** `make install` verifies the venv it just built | removing `pyvenv.cfg` makes install exit 1 instead of falsely succeeding |
+| `58db1ec` | **fix-1b** tasks load lazily, so the registry never depends on lifespan | caught by the full suite; ASGITransport runs no lifespan |
+| `d1d00c0` | **part-2** one folder per service; `app/core` vs `app/services`; routers discovered too | behaviour preserved: 158 passed before **and** after |
+
+## The result
+
+| | Baseline `22319b3` | Now |
+|---|---|---|
+| Base edits to add a feature | 3 files, 5 lines (2 protected) | **0** |
+| Hand-maintained registries | 3 | **0** |
+| Tests / coverage | 116 / 86.84% | **158 / 88.33%** |
+| Worker non-JSON log lines | 17 of 31 | **0 of 6** |
+
+## Gate — the full protocol, twice
+
+```
+             RUN 1                                    RUN 2
+lint         exit 0                                   exit 0
+typecheck    exit 0, 38 files                         exit 0, 38 files
+test         exit 0, 158 passed, 88.33%               exit 0, 158 passed, 88.33%
+smoke        exit 0, SMOKE PASSED                     exit 0, SMOKE PASSED
+scan         exit 0                                   exit 0
+```
+
+**Part D, the criterion that failed before:**
+
+```
+$ git diff --stat        # after adding a feature with a router, a task and a model
+                         <- empty
+
+$ git status --porcelain
+?? app/services/widgets/
+?? migrations/versions/20260824_2235_add_widget_table.py
+```
+
+PASS.
+
+## Still open (out of this brief's scope)
+
+Five findings from the baseline audit were not in `SOLIDIFY_BRIEF.md`'s list of
+six and were deliberately left alone. Highest value first:
+
+1. `ENVIRONMENT=prod` still boots with `postgres_password="apppassword"` -- no
+   validator ties the environment to the credential defaults.
+2. `cors_allow_origins` still defaults to `"*"`. The mechanism is correct; the
+   default is not.
+3. One unhandled exception still produces three error log records.
+4. A chunked over-limit body returns 400 rather than 413 (memory is bounded).
+5. No Celery retry policy is demonstrated.
