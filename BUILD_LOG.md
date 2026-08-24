@@ -45,3 +45,41 @@ redis_url = redis://localhost:6379/0
 secrets provider = EnvSecrets
 ```
 
+## Phase 1 — FastAPI skeleton + health — **PASS**
+
+**Built:** `app/main.py` app factory (`create_app`) with a lifespan hook;
+`app/api/health.py` exposing `/health/live` (no dependency I/O, so a slow
+database can never get a pod killed) and `/health/ready`, which runs a
+*registry* of dependency checks — later phases call
+`register_readiness_check("postgres", ...)` and this module never learns about
+Postgres/Redis/MinIO directly; `app/security/current_user.py`, the auth seam:
+a `Principal` model, a `STUB_PRINCIPAL` (`id="dev"`, `roles=["dev"]`), and a
+`CurrentUser` dependency alias with the `TODO: replace with Entra ID + Casbin`.
+
+### Gate — health endpoints and OpenAPI
+
+```
+$ make run
+$ curl -s -w "\nHTTP %{http_code}\n" localhost:8000/health/live
+{"status":"ok","service":"common-app-base","version":"0.1.0"}
+HTTP 200
+
+$ curl -s -w "\nHTTP %{http_code}\n" localhost:8000/health/ready
+{"status":"ok","service":"common-app-base","checks":{}}
+HTTP 200
+
+$ curl -s -o /dev/null -w "HTTP %{http_code}\n" localhost:8000/docs
+HTTP 200
+
+$ curl -s localhost:8000/openapi.json | head -c 120
+{"openapi":"3.1.0","info":{"title":"common-app-base","description":"Common Application Base — clone this and add busin
+```
+
+### Gate — the auth seam resolves
+
+```
+$ uv run python -c "from app.security.current_user import get_current_user; ..."
+principal: {'id': 'dev', 'name': 'Local Developer', 'roles': ['dev'], 'tenant_id': None}
+has_role(dev): True
+```
+
