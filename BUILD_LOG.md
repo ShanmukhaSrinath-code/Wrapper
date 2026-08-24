@@ -455,3 +455,92 @@ $ curl -s "localhost:3200/api/traces/97e12b15a8e0118645d79f5ec95c43b0"
     span name='POST /demo/audited'  request.id=85a140f5-5632-4d99-8127-65890ae28722
 ```
 
+## Phase 8 — Error handling + Sentry — **PASS**
+
+**Built:** `app/errors.py` — one `ErrorResponse` schema
+(`error`, `message`, `request_id`, `trace_id`, optional `detail`) returned by
+handlers for `AppError` (expected business failures: `NotFoundError`,
+`ConflictError`, `ValidationError`, `PermissionDeniedError`,
+`PayloadTooLargeError`), `RequestValidationError`, `StarletteHTTPException`,
+`SQLAlchemyError` and bare `Exception`. Sentry init that no-ops without a DSN.
+`GET /demo/boom` (unexpected failure) and `GET /demo/not-found` (expected one).
+
+Deliberate distinctions:
+- **Expected failures are warnings and are never sent to Sentry.** A 404 is not
+  a bug; paging on it trains people to ignore alerts.
+- **Database errors are logged, never returned.** Driver messages can leak
+  schema and data, so the caller gets a generic `database_error`.
+
+### Bug 1 (found by the gate) — the 500 had no `request_id`
+
+First run returned:
+```
+{"error":"internal_error","message":"An unexpected error occurred. ..."}
+```
+No `request_id`, no `X-Request-ID` header — on the one response that needs it
+most. Cause: `CorrelationMiddleware` called `clear_request_context()` *before*
+re-raising, but Starlette's `ServerErrorMiddleware` sits **outside** user
+middleware, so the 500 handler ran after the clear and found an empty context.
+Fixed by not clearing on the exception path (the next request clears on entry).
+
+### Bug 2 (found by the gate) — one failure produced **three** Sentry events
+
+The explicit `capture_exception` plus Sentry's `LoggingIntegration` promoting
+`log.error`/`log.exception` to events meant a single `ZeroDivisionError` was
+reported three times — triple quota and triple alert noise. Fixed with
+`LoggingIntegration(level=logging.INFO, event_level=None)`: logs become
+breadcrumbs, `capture_exception` stays the single source of events.
+
+### Gate 1 — `/demo/boom` returns clean JSON with the `request_id`, no stack trace
+
+```
+$ curl -D - localhost:8000/demo/boom
+HTTP/1.1 500 Internal Server Error
+x-request-id: 91d3fcdd-5017-4bc0-9d2e-de3cb2217cfb
+
+{"error":"internal_error",
+ "message":"An unexpected error occurred. Quote the request_id when reporting this.",
+ "request_id":"91d3fcdd-5017-4bc0-9d2e-de3cb2217cfb",
+ "trace_id":"366412902fc523e40c130a7c572d144f"}
+
+leak markers (traceback / ZeroDivision / File "...") in body: 0
+```
+
+### Gate 2 — the exception is logged with its `request_id` (traceback server-side only)
+
+```json
+{"http_method":"GET","http_path":"/demo/boom","event":"request.failed",
+ "request_id":"91d3fcdd-5017-4bc0-9d2e-de3cb2217cfb",
+ "trace_id":"366412902fc523e40c130a7c572d144f","level":"error",
+ "exception":"Traceback (most recent call last): ... ZeroDivisionError"}
+```
+
+### Gate 3 — every error class shares one schema
+
+```
+/demo/not-found  -> 404 {"error":"not_found","message":"No such demo resource.","request_id":"5e48d672-...","detail":{"looked_for":"nothing"}}
+/does-not-exist  -> 404 {"error":"not_found","message":"Not Found","request_id":"bfbdad4e-..."}
+?seed=notanumber -> 422 {"error":"validation_error","request_id":"89b355c8-...","detail":[{"type":"int_parsing","loc":["query","seed"],...}]}
+```
+
+### Gate 4 — with a DSN set, the event reaches Sentry tagged with the ids
+
+Verified against a local Sentry-protocol envelope sink (no real DSN needed):
+
+```
+request_id = be31a654-aec3-48c3-824b-40ca592f4f7f
+Sentry events for this one failure: 1        (was 3 before the fix)
+  exception : ZeroDivisionError: division by zero
+  tags      : {"service":"common-app-base",
+               "request_id":"be31a654-aec3-48c3-824b-40ca592f4f7f",
+               "trace_id":"5b45e4db4121ac68cad816aa343fc202"}
+
+Sentry events after 3 EXPECTED errors (404, 404, 422): 0
+```
+
+### Gate 5 — no DSN means a clean no-op
+
+```
+{"event":"sentry.disabled","reason":"SENTRY_DSN is not set","level":"info","logger":"app.errors"}
+```
+

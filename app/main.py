@@ -15,6 +15,7 @@ from app import __version__, cache
 from app.api import demo, health
 from app.config import Settings, settings
 from app.db import session as db_session
+from app.errors import configure_sentry, register_exception_handlers
 from app.logging import configure_logging, get_logger
 from app.middleware.correlation import CorrelationMiddleware
 from app.observability import (
@@ -55,6 +56,7 @@ def create_app(config: Settings | None = None) -> FastAPI:
 
     # Logging and tracing come first: everything below may want to log.
     configure_logging()
+    configure_sentry(config)
     configure_tracing(config)
 
     app = FastAPI(
@@ -71,6 +73,9 @@ def create_app(config: Settings | None = None) -> FastAPI:
     # Added last => outermost. CorrelationMiddleware must wrap everything so
     # even a failure inside another middleware still carries its request_id.
     app.add_middleware(CorrelationMiddleware)
+
+    # --- error handling ------------------------------------------------------
+    register_exception_handlers(app)
 
     # --- observability -------------------------------------------------------
     configure_metrics(app, config)

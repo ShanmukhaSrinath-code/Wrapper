@@ -103,7 +103,11 @@ class CorrelationMiddleware:
                     http_path=path,
                     duration_ms=round((time.perf_counter() - started) * 1000, 2),
                 )
-                clear_request_context()
+                # Deliberately do NOT clear the context here. Starlette's
+                # ServerErrorMiddleware sits *outside* this middleware, so the
+                # 500 handler runs after this `raise` -- clearing now would
+                # strip request_id from the very error response that needs it.
+                # The next request clears the context on entry anyway.
                 raise
             finally:
                 if path not in _QUIET_PATHS:

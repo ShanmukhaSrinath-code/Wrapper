@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app import cache
 from app.audit import write_audit
+from app.errors import NotFoundError
 from app.logging import current_request_id, current_trace_id
 from app.security.current_user import CurrentUser
 
@@ -95,3 +96,21 @@ async def audited(
         request_id=current_request_id(),
         trace_id=current_trace_id(),
     )
+
+
+@router.get("/boom", summary="Raise an unhandled exception on purpose")
+async def boom(user: CurrentUser) -> dict[str, Any]:
+    """Deliberately fail, to prove errors are handled, correlated and reported.
+
+    Raises a plain `ZeroDivisionError` -- an *unexpected* failure, so it takes
+    the `internal_error` path: 500, no stack trace to the caller, logged with
+    its request_id, and captured by Sentry when a DSN is configured.
+    """
+    await write_audit("demo.boom", actor=user, resource_type="demo", outcome="failure")
+    return {"never": 1 / 0}
+
+
+@router.get("/not-found", summary="Raise an expected business error")
+async def not_found(user: CurrentUser) -> dict[str, Any]:
+    """An *expected* failure: 404 in the same error schema, warned not paged."""
+    raise NotFoundError("No such demo resource.", detail={"looked_for": "nothing"})
