@@ -56,4 +56,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=5 \
   CMD curl -fsS http://localhost:8000/health/live || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --no-server-header: do not advertise the stack.
+# --proxy-headers:    trust X-Forwarded-Proto from the ingress, so the app
+#                     knows the request arrived over HTTPS and emits HSTS.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-server-header", "--proxy-headers", "--forwarded-allow-ips", "*"]

@@ -20,10 +20,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import SQLAlchemyError
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import Settings
 from app.logging import current_request_id, current_trace_id, get_logger
+from app.middleware.security import apply_security_headers
 
 log = get_logger(__name__)
 
@@ -81,8 +83,14 @@ class PayloadTooLargeError(AppError):
     error_code = "payload_too_large"
 
 
-def _render(status_code: int, error: str, message: str, detail: Any | None = None) -> JSONResponse:
-    """Build the error response, stamping the correlation ids from context."""
+def _render(
+    status_code: int,
+    error: str,
+    message: str,
+    detail: Any | None = None,
+    request: Request | None = None,
+) -> JSONResponse:
+    """Build the error response, stamping the correlation ids and security headers."""
     request_id = current_request_id()
     payload = ErrorResponse(
         error=error,
@@ -99,6 +107,14 @@ def _render(status_code: int, error: str, message: str, detail: Any | None = Non
     # raised before it runs would otherwise lose the id.
     if request_id:
         response.headers["X-Request-ID"] = request_id
+
+    # Starlette's ServerErrorMiddleware is the OUTERMOST layer, so a 500 it
+    # generates never passes back through SecurityHeadersMiddleware. Stamp the
+    # headers here as well, or error responses would ship without them.
+    apply_security_headers(
+        MutableHeaders(raw=response.raw_headers),
+        is_https=bool(request and request.url.scheme == "https"),
+    )
     return response
 
 
@@ -116,7 +132,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             http_path=request.url.path,
             message=exc.message,
         )
-        return _render(exc.status_code, exc.error_code, exc.message, exc.detail)
+        return _render(exc.status_code, exc.error_code, exc.message, exc.detail, request)
 
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -130,6 +146,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             "validation_error",
             "The request body or parameters failed validation.",
             detail=exc.errors(),
+            request=request,
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -147,7 +164,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             log.error("request.http_error", http_status=exc.status_code, http_path=request.url.path)
         else:
             log.info("request.http_error", http_status=exc.status_code, http_path=request.url.path)
-        return _render(exc.status_code, code, str(exc.detail))
+        return _render(exc.status_code, code, str(exc.detail), request=request)
 
     @app.exception_handler(SQLAlchemyError)
     async def _db(request: Request, exc: SQLAlchemyError) -> JSONResponse:
@@ -158,6 +175,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "database_error",
             "A database error occurred. The request was not completed.",
+            request=request,
         )
 
     @app.exception_handler(Exception)
@@ -173,6 +191,7 @@ def register_exception_handlers(app: FastAPI) -> None:
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             "internal_error",
             "An unexpected error occurred. Quote the request_id when reporting this.",
+            request=request,
         )
 
 

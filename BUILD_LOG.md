@@ -721,3 +721,119 @@ audit row written by the worker:
   detail      | {"size_bytes": 77, "line_count": 3, ...}
 ```
 
+## Phase 11 — Security (OWASP + scanning) — **PASS**
+
+**Built:** `app/middleware/security.py` — `SecurityHeadersMiddleware` (OWASP
+baseline + CSP), `RequestSizeLimitMiddleware`, and `build_cors_kwargs`;
+`trivy.yaml` + `trivy-secret.yaml`; `make scan`.
+
+Deliberate choices:
+- **HSTS only over HTTPS.** Sending it on plain-HTTP localhost is meaningless,
+  and harmful if a browser ever honours it for `localhost`. Uvicorn runs with
+  `--proxy-headers`, so behind a TLS-terminating ingress the app sees
+  `scheme=https` and emits it.
+- **CSP is `default-src 'none'` for the API**, with a narrower policy for
+  `/docs` and `/redoc` only (Swagger UI loads from a CDN).
+- **The size limit caps the stream, not just `Content-Length`.** A chunked
+  request can omit the header entirely.
+- **`allow_origins=["*"]` + `allow_credentials=True` raises at startup.**
+  Browsers reject that combination, so it fails loudly instead of producing
+  CORS that silently never works.
+- **Secret-scan allow-rules are keyed by PATH, not by value**, so the known
+  local dev credentials are ignored while a real secret committed elsewhere
+  still fails the scan.
+
+### Bug 1 (found by the gate) — container was crash-looping
+
+A multi-line `CMD [...]` broke the JSON exec form, so Docker fell back to shell
+form and the container restarted forever (`/bin/sh: 1: [uvicorn,: not found`).
+The first "no server header" reading was therefore meaningless — there was no
+server. Fixed to a single-line `CMD` and re-verified.
+
+### Bug 2 (found by the gate) — `Server: uvicorn` could not be removed in middleware
+
+Uvicorn appends its banner *after* middleware, in the protocol layer, so
+deleting the header in an ASGI wrapper silently did nothing. Fixed with
+`--no-server-header` on the command line.
+
+### Bug 3 (found by the gate) — error responses shipped with NO security headers
+
+The 500 from `/demo/boom` carried only `x-request-id`. Starlette's
+`ServerErrorMiddleware` is the **outermost** layer, so a response it generates
+never passes back through `SecurityHeadersMiddleware`. Fixed by extracting
+`apply_security_headers()` and calling it from the error renderer too.
+
+### Gate 1 — the security header set is present
+
+```
+$ curl -D - localhost:8000/health/live
+x-content-type-options: nosniff
+x-frame-options: DENY
+referrer-policy: strict-origin-when-cross-origin
+permissions-policy: geolocation=(), microphone=(), camera=(), payment=(), usb=()
+x-permitted-cross-domain-policies: none
+cross-origin-opener-policy: same-origin
+cross-origin-resource-policy: same-origin
+cache-control: no-store
+content-security-policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
+x-request-id: 183160c8-1a5f-4c85-8f7b-0f9b16966240
+                                        (no `server:` header — banner suppressed)
+
+$ curl -D - -H "X-Forwarded-Proto: https" localhost:8000/health/live
+strict-transport-security: max-age=31536000; includeSubDomains     <- HSTS over TLS only
+```
+
+And on error responses, after the Bug 3 fix:
+
+```
+$ curl -D - localhost:8000/demo/boom
+HTTP/1.1 500 Internal Server Error
+x-request-id: 86c464ec-9414-44f0-bea2-222025746418
+x-content-type-options: nosniff
+x-frame-options: DENY
+referrer-policy: strict-origin-when-cross-origin
+content-security-policy: default-src 'none'; frame-ancestors 'none'; ...
+```
+
+### Gate 2 — request-size limit and CORS
+
+```
+$ curl -F "file=@11MiB.bin" localhost:8000/files          # limit is 10 MiB
+{"error":"payload_too_large","message":"Request body exceeds the 10485760 byte limit.",
+ "request_id":"7205a42d-...","trace_id":"3c3958d2..."}
+  HTTP 413
+
+$ curl -F "file=@upload.txt" localhost:8000/files          # small file unaffected
+  HTTP 201
+
+$ curl -X OPTIONS -H "Origin: http://example.com" -H "Access-Control-Request-Method: POST" localhost:8000/files
+HTTP/1.1 200 OK
+access-control-allow-origin: *
+access-control-allow-methods: DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT
+access-control-max-age: 600
+```
+
+### Gate 3 — no secrets in code
+
+```
+$ grep -rnE "(password|secret|api[_-]?key|token)\s*=\s*[\"'][^\"']{6,}" app/ --include="*.py"
+  none found in app/ (all credentials come from Settings/env)
+```
+
+### Gate 4 — Trivy dependency + image scan (policy: fail on HIGH/CRITICAL)
+
+```
+$ trivy fs .
+┌──────────────────────────┬────────────┬─────────────────┬─────────┬───────────────────┐
+│          Target          │    Type    │ Vulnerabilities │ Secrets │ Misconfigurations │
+├──────────────────────────┼────────────┼─────────────────┼─────────┼───────────────────┤
+│ uv.lock                  │     uv     │        0        │    -    │         -         │
+│ deploy/docker/Dockerfile │ dockerfile │        -        │    -    │         0         │
+└──────────────────────────┴────────────┴─────────────────┴─────────┴───────────────────┘
+EXIT CODE: 0
+
+$ trivy image common-app-base:local --severity HIGH,CRITICAL --ignore-unfixed
+  TOTAL HIGH/CRITICAL (fixable): 0
+  EXIT CODE: 0
+```
+

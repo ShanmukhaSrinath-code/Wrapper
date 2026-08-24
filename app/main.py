@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__, cache, storage
 from app.api import demo, files, health
@@ -18,6 +19,11 @@ from app.db import session as db_session
 from app.errors import configure_sentry, register_exception_handlers
 from app.logging import configure_logging, get_logger
 from app.middleware.correlation import CorrelationMiddleware
+from app.middleware.security import (
+    RequestSizeLimitMiddleware,
+    SecurityHeadersMiddleware,
+    build_cors_kwargs,
+)
 from app.observability import (
     configure_metrics,
     configure_tracing,
@@ -76,8 +82,16 @@ def create_app(config: Settings | None = None) -> FastAPI:
     )
 
     # --- middleware ----------------------------------------------------------
-    # Added last => outermost. CorrelationMiddleware must wrap everything so
-    # even a failure inside another middleware still carries its request_id.
+    # Starlette runs these in REVERSE order of registration, so the last one
+    # added is the outermost. Reading bottom-up gives the request path:
+    #   CorrelationMiddleware  (ids exist before anything else logs)
+    #     -> CORS              (preflight answered without touching the app)
+    #       -> SecurityHeaders (stamps every response, errors included)
+    #         -> SizeLimit     (reject huge bodies before a route sees them)
+    #           -> routes
+    app.add_middleware(RequestSizeLimitMiddleware, config=config)
+    app.add_middleware(SecurityHeadersMiddleware, config=config)
+    app.add_middleware(CORSMiddleware, **build_cors_kwargs(config))
     app.add_middleware(CorrelationMiddleware)
 
     # --- error handling ------------------------------------------------------

@@ -1,0 +1,32 @@
+# Trivy policy for the Common Application Base.
+# Build-breaking severity is HIGH and CRITICAL; lower findings are reported
+# but do not fail a build, so the gate stays meaningful rather than ignored.
+severity:
+  - HIGH
+  - CRITICAL
+
+exit-code: 1
+
+scan:
+  scanners:
+    - vuln
+    - secret
+    - misconfig
+  skip-dirs:
+    - .venv
+    - .git
+    - .tmp
+    - node_modules
+    - htmlcov
+
+vulnerability:
+  ignore-unfixed: true
+
+misconfiguration:
+  # Compose files describe a local dev stack with deliberately weak defaults
+  # (minioadmin/apppassword). Production config lives in K8s Secrets.
+  helm:
+    values: []
+
+secret:
+  config: trivy-secret.yaml
