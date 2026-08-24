@@ -6,13 +6,19 @@ manages its own connection pool, so a single client is the right unit.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 import redis.asyncio as redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from app.config import settings
+from app.logging import get_logger
+
+log = get_logger(__name__)
 
 _client: redis.Redis | None = None
 
@@ -46,32 +52,65 @@ async def close_client() -> None:
 
 
 # --------------------------------------------------------------------------
+# Degradation
+# --------------------------------------------------------------------------
+#: Transport failures that mean "Redis is not reachable right now". These are
+#: survivable: a cache is an optimisation, so losing it should cost latency, not
+#: availability. Anything *else* -- a TypeError, a bad serialiser -- is a bug and
+#: is deliberately left to propagate.
+CACHE_OUTAGE_ERRORS = (RedisConnectionError, RedisTimeoutError)
+
+
+# --------------------------------------------------------------------------
 # JSON value helpers
 # --------------------------------------------------------------------------
 async def get_json(key: str) -> Any | None:
-    """Return the decoded value at ``key``, or ``None`` on miss."""
-    raw = await get_client().get(key)
+    """Return the decoded value at ``key``, or ``None`` on miss.
+
+    A cache outage is reported as a miss. The caller then recomputes from the
+    origin, which is exactly what it would do for a genuine miss -- so an outage
+    degrades a route's latency rather than its status code.
+    """
+    try:
+        raw = await get_client().get(key)
+    except CACHE_OUTAGE_ERRORS as exc:
+        log.warning("cache.unavailable", operation="get", key=key, error=str(exc))
+        return None
+
     if raw is None:
         return None
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # A poisoned key must not break the caller -- treat it as a miss.
-        await get_client().delete(key)
+        # A poisoned key must not break the caller -- treat it as a miss. If the
+        # cache is also unreachable, the eviction simply does not happen.
+        with contextlib.suppress(*CACHE_OUTAGE_ERRORS):
+            await get_client().delete(key)
         return None
 
 
 async def set_json(key: str, value: Any, ttl_seconds: int | None = None) -> None:
-    """Store ``value`` as JSON with a TTL (defaults to ``CACHE_TTL_SECONDS``)."""
+    """Store ``value`` as JSON with a TTL (defaults to ``CACHE_TTL_SECONDS``).
+
+    Failing to *populate* a cache must never fail the request that just did the
+    work to compute the value.
+    """
     ttl = settings.cache_ttl_seconds if ttl_seconds is None else ttl_seconds
-    await get_client().set(key, json.dumps(value, default=str), ex=ttl)
+    try:
+        await get_client().set(key, json.dumps(value, default=str), ex=ttl)
+    except CACHE_OUTAGE_ERRORS as exc:
+        log.warning("cache.unavailable", operation="set", key=key, error=str(exc))
 
 
 async def delete(*keys: str) -> int:
-    """Drop keys; returns how many existed."""
+    """Drop keys; returns how many existed (0 if the cache is unreachable)."""
     if not keys:
         return 0
-    return int(await get_client().delete(*keys))
+    try:
+        return int(await get_client().delete(*keys))
+    except CACHE_OUTAGE_ERRORS as exc:
+        log.warning("cache.unavailable", operation="delete", keys=list(keys), error=str(exc))
+        return 0
 
 
 async def get_or_set[T](
