@@ -172,3 +172,56 @@ $ docker start cab-postgres && curl localhost:8000/health/ready
 {"status":"ok","service":"common-app-base","checks":{"postgres":"ok"}}   HTTP 200
 ```
 
+## Phase 4 — Redis + caching — **PASS**
+
+**Built:** `redis:7-alpine` in compose; `app/cache/client.py` with a lazily
+created shared async client, `get_json`/`set_json`/`delete`, and the
+cache-aside helper `get_or_set(key, producer, ttl)` which returns
+`(value, hit)` — so the caller reports HIT/MISS as fact rather than inferring
+it from latency. A poisoned (non-JSON) key is deleted and treated as a miss
+instead of raising. `app/api/demo.py` exposes `GET /demo/cached` and
+`DELETE /demo/cached`, both already depending on the `CurrentUser` auth seam.
+`/health/ready` now pings Redis too.
+
+### Gate 1 — first call MISS, subsequent calls HIT
+
+```
+$ curl -X DELETE "localhost:8000/demo/cached?seed=7"
+{"invalidated":0,"seed":7,"by":"dev"}
+
+$ curl "localhost:8000/demo/cached?seed=7"        # call 1
+{"key":"demo:cached:7","value":{"seed":7,"result":49,"unit":"square"},"cache":"MISS","computed_by":"dev"} | 0.256321s
+
+$ curl "localhost:8000/demo/cached?seed=7"        # call 2
+{"key":"demo:cached:7","value":{"seed":7,"result":49,"unit":"square"},"cache":"HIT","computed_by":"dev"}  | 0.012599s
+
+$ curl "localhost:8000/demo/cached?seed=7"        # call 3
+{"key":"demo:cached:7","value":{"seed":7,"result":49,"unit":"square"},"cache":"HIT","computed_by":"dev"}  | 0.004114s
+```
+
+Latency corroborates the reported flag: 256 ms computed → 4 ms served.
+
+### Gate 2 — the value really is in Redis, with a TTL
+
+```
+$ docker exec cab-redis redis-cli KEYS 'demo:*'
+demo:cached:7
+$ docker exec cab-redis redis-cli GET 'demo:cached:7'
+{"seed": 7, "result": 49, "unit": "square"}
+$ docker exec cab-redis redis-cli TTL 'demo:cached:7'
+48
+```
+
+### Gate 3 — readiness shows Redis, and fails when it is down
+
+```
+$ curl localhost:8000/health/ready
+{"status":"ok","service":"common-app-base","checks":{"redis":"ok","postgres":"ok"}}
+
+$ docker stop cab-redis && curl localhost:8000/health/ready
+{"status":"degraded","service":"common-app-base","checks":{"postgres":"ok","redis":"error: timeout after 3s"}}
+
+$ docker start cab-redis && curl localhost:8000/health/ready
+{"status":"ok","service":"common-app-base","checks":{"redis":"ok","postgres":"ok"}}
+```
+

@@ -11,8 +11,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app import __version__
-from app.api import health
+from app import __version__, cache
+from app.api import demo, health
 from app.config import Settings, settings
 from app.db import session as db_session
 
@@ -22,6 +22,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start and stop long-lived resources (DB pool, Redis, ...)."""
     yield
     await db_session.dispose_engine()
+    await cache.close_client()
 
 
 def create_app(config: Settings | None = None) -> FastAPI:
@@ -46,9 +47,11 @@ def create_app(config: Settings | None = None) -> FastAPI:
     # Registered here rather than inside app/api/health.py so the health module
     # never has to know which dependencies this deployment happens to use.
     health.register_readiness_check("postgres", db_session.ping)
+    health.register_readiness_check("redis", cache.ping)
 
     # --- routers -------------------------------------------------------------
     app.include_router(health.router)
+    app.include_router(demo.router)
 
     return app
 
