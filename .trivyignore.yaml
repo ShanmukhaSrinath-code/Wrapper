@@ -1,0 +1,15 @@
+# Scoped, justified suppressions. Each entry names an ID *and* a path, so a
+# genuine finding elsewhere is still a build failure.
+
+misconfigurations:
+  - id: KSV-0109
+    paths:
+      - "deploy/k8s/configmap.yaml"
+    statement: >-
+      False positive. KSV-0109 matches on the key NAME containing "SECRETS".
+      `SECRETS_PROVIDER` selects which secrets *provider* to use (`env` or
+      `azure_key_vault`); its value is a provider name, not a credential. Real
+      credentials live in deploy/k8s/secret.yaml, which is placeholders-only and
+      is meant to be replaced by External Secrets / Sealed Secrets / the Azure
+      Key Vault CSI driver. Scoped to this one file so a secret added to any
+      other ConfigMap still fails the build.

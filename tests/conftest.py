@@ -55,3 +55,36 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
 def sync_client() -> Iterator[httpx.Client]:
     with httpx.Client(base_url=BASE_URL, timeout=30.0) as c:
         yield c
+
+
+@pytest.fixture
+async def app_client() -> AsyncIterator[httpx.AsyncClient]:
+    """Drive the application **in this process**, over an ASGI transport.
+
+    Prefer this over `client` for feature tests: it exercises the same app
+    object uvicorn serves, and -- unlike calls over the network to the
+    container -- the code it runs is visible to coverage.
+
+    Lives here rather than in one test module so any new feature suite can just
+    ask for it.
+    """
+    # Import lazily: importing app.main builds the app, and unit tests that
+    # never touch it should not pay for that.
+    from app import cache
+    from app.db import session as db_session
+    from app.main import app as asgi_app
+    from app.storage import get_storage
+
+    # ASGITransport does not run the lifespan hook, so do the one piece of
+    # startup that request handling depends on.
+    await get_storage().ensure_ready()
+
+    transport = httpx.ASGITransport(app=asgi_app, raise_app_exceptions=False)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        yield c
+
+    # The engine and Redis client are process singletons bound to the loop that
+    # created them, and pytest-asyncio gives each test a fresh loop. Without
+    # disposing them the next test dies with "Event loop is closed".
+    await db_session.dispose_engine()
+    await cache.close_client()

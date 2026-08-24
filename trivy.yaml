@@ -30,3 +30,6 @@ misconfiguration:
 
 secret:
   config: trivy-secret.yaml
+
+# Scoped suppressions, each with a written justification.
+ignorefile: .trivyignore.yaml

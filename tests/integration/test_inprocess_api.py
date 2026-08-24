@@ -2,9 +2,9 @@
 
 `test_api.py` drives the containerised app over HTTP, which proves the real
 deployment works but is invisible to coverage -- the code runs in another
-process. These tests build the very same app with `create_app()` and drive it
-through an ASGI transport, so the routers, middleware, error handlers and
-adapters are actually measured.
+process. These tests drive the very same app object through an ASGI transport
+(the shared `app_client` fixture in tests/conftest.py), so the routers,
+middleware, error handlers and adapters are actually measured.
 
 They still use the real Postgres, Redis and MinIO from the compose stack
 (published on localhost), so nothing important is mocked away.
@@ -15,40 +15,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from collections.abc import AsyncIterator
 
 import httpx
 import pytest
 
-from app import cache
-from app.db import session as db_session
-from app.main import app as asgi_app
-from app.storage import get_storage
-
 pytestmark = pytest.mark.integration
-
-
-@pytest.fixture
-async def app_client() -> AsyncIterator[httpx.AsyncClient]:
-    """Drive the exact application object uvicorn serves.
-
-    Importing the module-level `app` rather than calling `create_app()` again
-    matters: `app.main` builds one at import time, and Prometheus collectors
-    are process-global, so the *first* app is the instrumented one.
-    """
-    # ASGITransport does not run the lifespan hook, so do the one piece of
-    # startup these tests depend on explicitly.
-    await get_storage().ensure_ready()
-
-    transport = httpx.ASGITransport(app=asgi_app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
-        yield c
-
-    # The engine and Redis client are process singletons bound to the loop that
-    # created them, and pytest-asyncio gives each test a fresh loop. Without
-    # disposing them here the next test dies with "Event loop is closed".
-    await db_session.dispose_engine()
-    await cache.close_client()
 
 
 # --------------------------------------------------------------------------
