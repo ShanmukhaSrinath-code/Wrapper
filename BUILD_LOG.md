@@ -1136,6 +1136,20 @@ green cell it did not earn. The Sentry path *was* verified for real in Phase 8
 against a local envelope sink: one event, tagged with the matching `request_id`
 and `trace_id`. With `SENTRY_DSN` set, the same events flow to a real project.
 
+### Follow-up — cold-start performance
+
+Verified from a genuinely clean slate (`docker compose down -v`, full rebuild,
+`make migrate`, `make smoke`). It passed, but took **over 10 minutes**: each
+probe retried on its own schedule and they ran sequentially, so a cold Loki and
+an unscraped Prometheus made the worst cases additive. The probes touch no
+shared state, so they now run concurrently via `asyncio.gather`:
+
+```
+$ make smoke
+  SMOKE PASSED - one request_id joins logs, traces, audit and metrics.
+SMOKE EXIT: 0   elapsed: 25s          # was > 600s
+```
+
 ---
 
 # FINAL STATE
@@ -1183,3 +1197,4 @@ than assuming success:
 | 14 | The audit assertion silently returned nothing (`psql -c` ignores `:'var'`) |
 | 14 | Error responses carried no `X-Trace-ID` |
 | 14 | The smoke report showed `FAIL` for a check that was never required |
+| 14 | `make smoke` took >10 min on a cold stack (probes retried sequentially) |
