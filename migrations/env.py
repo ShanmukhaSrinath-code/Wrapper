@@ -16,7 +16,14 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
-from app.db.models import Base
+from app.core.discovery import import_discovered_models
+from app.db.base import Base
+from app.db.migration_guard import reject_destructive_ops
+
+# Import every discovered model *before* metadata is read. This is what makes a
+# forgotten registration impossible rather than merely discouraged: autogenerate
+# can only propose dropping a table if the model is genuinely gone.
+import_discovered_models()
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_url)
@@ -36,6 +43,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        process_revision_directives=reject_destructive_ops,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -47,6 +55,7 @@ def do_run_migrations(connection: Connection) -> None:
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
+        process_revision_directives=reject_destructive_ops,
     )
     with context.begin_transaction():
         context.run_migrations()
