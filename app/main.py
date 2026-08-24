@@ -17,7 +17,12 @@ from app.config import Settings, settings
 from app.db import session as db_session
 from app.logging import configure_logging, get_logger
 from app.middleware.correlation import CorrelationMiddleware
-from app.observability import configure_metrics, configure_tracing, instrument_app
+from app.observability import (
+    configure_metrics,
+    configure_tracing,
+    instrument_app,
+    instrument_sqlalchemy,
+)
 
 log = get_logger(__name__)
 
@@ -25,6 +30,9 @@ log = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start and stop long-lived resources (DB pool, Redis, ...)."""
+    # The engine must exist before it can be instrumented, and it is built
+    # lazily -- so this belongs in lifespan, not in create_app().
+    instrument_sqlalchemy(db_session.get_engine())
     log.info(
         "app.startup",
         version=__version__,

@@ -372,3 +372,86 @@ $ curl -u admin:admin .../api/datasources/proxy/uid/prometheus/api/v1/query
   /demo/cached: 1.295 req/s
 ```
 
+## Phase 7 — OpenTelemetry tracing + Audit — **PASS**
+
+**Built:** OTel auto-instrumentation for FastAPI, SQLAlchemy (instrumented in
+`lifespan`, since the engine is built lazily) and Redis; `app/audit/` with the
+`audit_log` model and `write_audit()`; `POST /demo/audited`.
+
+Two design points worth stating:
+
+- **`write_audit` takes no ids.** It reads `request_id`/`trace_id` out of the
+  request context, so a new call site is correlated by default and no caller
+  can forget to pass them.
+- **Audit rows are written in their own transaction.** Sharing the request
+  session would mean a business rollback erased the record of the attempt —
+  precisely the case an audit trail exists to capture. `write_audit` also never
+  raises: a failed audit is logged at error, it does not 500 a successful
+  operation.
+
+**Also added:** `grafana/tempo` under an opt-in `tracing` compose profile plus
+a Tempo datasource with logs↔traces links in both directions. It is *not* in
+the default service set, so a plain `docker compose up` still brings up exactly
+the specified services — but the Phase 14 "a trace exists" assertion is now
+provable against a real trace store rather than asserted from a header.
+
+### Gate 1 — log lines carry a real `trace_id`
+
+```
+$ curl -G localhost:3100/loki/api/v1/query_range \
+    --data-urlencode 'query={service="app"} | json | trace_id = `97e12b15a8e0118645d79f5ec95c43b0`'
+  lines matched: 2
+    06:22:13.726643Z  event=audit.written      request_id=85a140f5-...  trace_id=97e12b15a8e0118645d79f5ec95c43b0
+    06:22:13.727628Z  event=request.completed  request_id=85a140f5-...  trace_id=97e12b15a8e0118645d79f5ec95c43b0
+```
+
+### Gate 2 — the demo route inserts **exactly one** audit row with matching ids
+
+```
+$ curl -D - -X POST "localhost:8000/demo/audited?note=phase-7-gate"
+x-request-id: 85a140f5-5632-4d99-8127-65890ae28722
+x-trace-id:   97e12b15a8e0118645d79f5ec95c43b0
+
+$ psql -c "SELECT * FROM audit_log WHERE request_id = '85a140f5-...'"
+-[ RECORD 1 ]-------------------------------------
+id          | 22f0495c-b533-4fdb-be90-a24ffb6583d3
+action      | demo.audited
+outcome     | success
+actor_id    | dev
+actor_roles | dev
+request_id  | 85a140f5-5632-4d99-8127-65890ae28722   <- matches X-Request-ID
+trace_id    | 97e12b15a8e0118645d79f5ec95c43b0       <- matches X-Trace-ID
+http_method | POST
+http_path   | /demo/audited
+detail      | {"note": "phase-7-gate"}
+
+$ psql -c "SELECT count(*) ... WHERE request_id = '85a140f5-...'"
+1                                                    <- exactly one
+```
+
+### Gate 3 — append-only is enforced by the database, not by convention
+
+```
+$ psql -c "UPDATE audit_log SET outcome='tampered' WHERE request_id='85a140f5-...';"
+ERROR:  audit_log is append-only: UPDATE is not permitted
+
+$ psql -c "DELETE FROM audit_log WHERE request_id='85a140f5-...';"
+ERROR:  audit_log is append-only: DELETE is not permitted
+
+$ psql -c "SELECT outcome, count(*) ... GROUP BY outcome;"
+success|1                                            <- row survived unchanged
+```
+
+### Gate 4 — the trace really exists, with DB spans inside it
+
+```
+$ curl -s "localhost:3200/api/traces/97e12b15a8e0118645d79f5ec95c43b0"
+  resource batches: 3
+  service.name = common-app-base
+    span name='connect'                      <- SQLAlchemy instrumentation
+    span name='INSERT'                       <- the audit insert
+    span name='POST /demo/audited http send'
+    span name='POST /demo/audited'           <- FastAPI instrumentation
+    span name='POST /demo/audited'  request.id=85a140f5-5632-4d99-8127-65890ae28722
+```
+

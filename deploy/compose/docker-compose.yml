@@ -15,6 +15,9 @@ x-app-env: &app-env
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   CACHE_TTL_SECONDS: "60"
+  # Empty by default: spans are still generated (so trace_id is real) but not
+  # shipped. Set to http://tempo:4318 together with `--profile tracing`.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
 
 services:
   # --------------------------------------------------------------- app ------
@@ -128,6 +131,28 @@ services:
       retries: 20
       start_period: 20s
 
+  # ------------------------------------------------------------- tempo ------
+  # Opt-in trace store: `docker compose --profile tracing up -d`.
+  # Left out of the default set so a plain `docker compose up` stays lean.
+  tempo:
+    image: grafana/tempo:2.7.0
+    container_name: cab-tempo
+    profiles: ["tracing"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo-config.yaml"]
+    ports:
+      - "${TEMPO_PORT:-3200}:3200"
+      - "4318:4318"
+    volumes:
+      - ../tempo/tempo-config.yaml:/etc/tempo/tempo-config.yaml:ro
+      - tempo-data:/var/tempo
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3200/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
   # ----------------------------------------------------------- grafana ------
   grafana:
     image: grafana/grafana:11.4.0
@@ -161,6 +186,7 @@ services:
       start_period: 20s
 
 volumes:
+  tempo-data:
   prometheus-data:
   postgres-data:
   redis-data:

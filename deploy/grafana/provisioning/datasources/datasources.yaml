@@ -12,9 +12,10 @@ datasources:
       # Turn a trace_id in a log line into a click-through to the trace.
       derivedFields:
         - name: TraceID
-          datasourceUid: ""
+          datasourceUid: tempo
           matcherRegex: '"trace_id"\s*:\s*"([a-f0-9]{32})"'
           url: "$${__value.raw}"
+          urlDisplayLabel: "View trace"
 
   - name: Prometheus
     type: prometheus
@@ -24,3 +25,20 @@ datasources:
     jsonData:
       httpMethod: POST
       timeInterval: 15s
+
+  # Only reachable when the `tracing` compose profile is enabled.
+  - name: Tempo
+    type: tempo
+    access: proxy
+    uid: tempo
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        filterByTraceID: true
+        customQuery: true
+        query: '{service="app"} | json | trace_id = `$${__span.traceId}`'
+      lokiSearch:
+        datasourceUid: loki
