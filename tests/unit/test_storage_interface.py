@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.storage.base import ObjectNotFoundError, Storage, StoredObject
+from app.core.storage.base import ObjectNotFoundError, Storage, StoredObject
 
 
 class InMemoryStorage(Storage):

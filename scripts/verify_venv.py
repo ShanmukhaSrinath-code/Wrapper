@@ -24,7 +24,7 @@ from pathlib import Path
 #: that files were copied. Covers each dependency group `make install` installs.
 REQUIRED_IMPORTS = (
     "alembic",
-    "app.config",
+    "app.core.config",
     "celery",
     "fastapi",
     "httpx",

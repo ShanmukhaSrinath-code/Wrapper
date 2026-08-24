@@ -1,6 +1,6 @@
 """Alembic environment.
 
-Reads the DSN from ``app.config.settings`` -- never from alembic.ini -- so the
+Reads the DSN from ``app.core.config.settings`` -- never from alembic.ini -- so the
 environment stays the single source of truth. Runs migrations through the async
 engine, matching how the application connects.
 """
@@ -15,10 +15,10 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from app.config import settings
+from app.core.config import settings
+from app.core.db.base import Base
+from app.core.db.migration_guard import reject_destructive_ops
 from app.core.discovery import import_discovered_models
-from app.db.base import Base
-from app.db.migration_guard import reject_destructive_ops
 
 # Import every discovered model *before* metadata is read. This is what makes a
 # forgotten registration impossible rather than merely discouraged: autogenerate

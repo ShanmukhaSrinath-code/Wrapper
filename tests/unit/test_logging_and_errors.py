@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from starlette.datastructures import MutableHeaders
 
-from app.config import Settings
-from app.errors import (
+from app.core.config import Settings
+from app.core.errors import (
     AppError,
     ConflictError,
     ErrorResponse,
@@ -14,15 +14,15 @@ from app.errors import (
     PayloadTooLargeError,
     PermissionDeniedError,
 )
-from app.logging import (
+from app.core.logging import (
     bind_request_context,
     clear_request_context,
     configure_logging,
     current_request_id,
     current_trace_id,
 )
-from app.middleware.correlation import _is_valid_request_id
-from app.middleware.security import (
+from app.core.middleware.correlation import _is_valid_request_id
+from app.core.middleware.security import (
     API_CSP,
     BASE_SECURITY_HEADERS,
     apply_security_headers,

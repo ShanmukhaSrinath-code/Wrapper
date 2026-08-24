@@ -54,6 +54,7 @@ dev = [
   "pytest-playwright>=0.6.0",
   "types-requests",
   "boto3-stubs[s3]",
+  "import-linter>=2.13",
 ]
 
 [build-system]
@@ -125,3 +126,23 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+
+# ----------------------------------------------------------------------------
+# import-linter -- the core/services boundary is a build failure, not a habit
+# ----------------------------------------------------------------------------
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "Infrastructure must not depend on business logic"
+type = "forbidden"
+source_modules = ["app.core"]
+forbidden_modules = ["app.services"]
+# app.core.discovery imports plugin modules *by name at runtime*, which is the
+# whole point of a plugin seam. That is not a static dependency and import-linter
+# does not see it; there is deliberately no `import app.services` anywhere in core.
+
+[[tool.importlinter.contracts]]
+name = "Features may not import each other"
+type = "independence"
+modules = ["app.services.demo", "app.services.files"]

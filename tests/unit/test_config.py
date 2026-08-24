@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.config import EnvSecrets, Secrets, Settings, get_secrets
+from app.core.config import EnvSecrets, Secrets, Settings, get_secrets
 
 
 def test_defaults_are_local_friendly() -> None:

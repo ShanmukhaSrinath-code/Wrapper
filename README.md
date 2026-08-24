@@ -5,7 +5,9 @@ only business logic — configuration, database, cache, object storage, backgrou
 jobs, logging, metrics, tracing, auditing, error reporting, security headers,
 tests, CI and Kubernetes manifests are already wired together **and correlated**.
 
+How the services fit together: [ARCHITECTURE.md](ARCHITECTURE.md).
 Per-phase build history with real gate output: [BUILD_LOG.md](BUILD_LOG.md).
+Independent acceptance audit: [TEST_REPORT.md](TEST_REPORT.md).
 
 ---
 
@@ -35,7 +37,7 @@ promtail, prometheus, grafana**. Traces are stored by an opt-in profile:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318 \
-  docker compose -f deploy/compose/docker-compose.yml --profile tracing up -d
+  docker compose -f deploy/docker-compose.yml --profile tracing up -d
 ```
 
 ### Prerequisites
@@ -93,15 +95,21 @@ table; it exits non-zero if any leg is missing.
 
 ```
 app/
-  api/            <- add your routers here; delete demo.py
-  db/models/      <- add your models here; delete example.py
-  jobs/tasks.py   <- add your Celery tasks
-  services/       <- (create this) your business logic
+  core/       <- infrastructure. DO NOT EDIT to add a feature.
+  services/   <- your business logic goes HERE. Everything is auto-discovered.
 ```
 
-Register a router in [`app/main.py`](app/main.py) and a model in
-[`app/db/models/__init__.py`](app/db/models/__init__.py), then
-`make revision m="..."` and `make migrate`.
+Drop a module (or a package) into [`app/services/`](app/services/):
+
+| Define | And you get |
+|---|---|
+| `router = APIRouter(...)` | mounted on the app — no edit to `main.py` |
+| `@celery_app.task` | registered with the worker — no list to update |
+| a SQLAlchemy model | in `Base.metadata`, seen by Alembic autogenerate |
+
+Then `make revision m="..."` and `make migrate`. **Adding a feature requires
+zero edits to `app/core/**` or `app/main.py`** — there are no registries to
+forget. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Everything else — correlation, error shape, security headers, health probes,
 metrics, audit — applies to your new code automatically. Two conventions are
@@ -122,7 +130,7 @@ Run `make help` for the full list.
 | Target | What it does |
 |---|---|
 | `make install` | Install Python 3.12 and every dependency group |
-| `make lint` / `make fmt` | ruff check + format (check / fix) |
+| `make lint` / `make fmt` | ruff check + format + import-boundary contracts |
 | `make typecheck` | mypy |
 | `make run` | Run the API locally with reload |
 | `make up` / `make down` | Start / tear down the compose stack |

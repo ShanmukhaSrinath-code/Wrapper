@@ -115,7 +115,7 @@ jobs:
         run: |
           uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 \
             --no-server-header --proxy-headers --forwarded-allow-ips '*' &
-          uv run celery -A app.jobs.celery_app:celery_app worker --loglevel=INFO &
+          uv run celery -A app.core.jobs.celery_app:celery_app worker --loglevel=INFO &
           for i in $(seq 1 60); do
             curl -fsS http://localhost:8000/health/ready && break
             sleep 2
@@ -216,7 +216,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/docker/Dockerfile
+          file: services/app/Dockerfile
           push: false
           load: true
           tags: common-app-base:ci
@@ -259,7 +259,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: deploy/docker/Dockerfile
+          file: services/app/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -70,10 +70,10 @@ async def app_client() -> AsyncIterator[httpx.AsyncClient]:
     """
     # Import lazily: importing app.main builds the app, and unit tests that
     # never touch it should not pay for that.
-    from app import cache
-    from app.db import session as db_session
+    from app.core import cache
+    from app.core.db import session as db_session
+    from app.core.storage import get_storage
     from app.main import app as asgi_app
-    from app.storage import get_storage
 
     # ASGITransport does not run the lifespan hook, so do the one piece of
     # startup that request handling depends on.

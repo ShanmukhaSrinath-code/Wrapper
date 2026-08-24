@@ -12,21 +12,22 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import __version__, cache, storage
-from app.api import demo, docs, files, health
-from app.config import Settings, settings
-from app.core.discovery import import_discovered_models
-from app.db import session as db_session
-from app.errors import configure_sentry, register_exception_handlers
-from app.jobs.celery_app import load_tasks
-from app.logging import configure_logging, get_logger
-from app.middleware.correlation import CorrelationMiddleware
-from app.middleware.security import (
+from app import __version__
+from app.core import cache, storage
+from app.core.api import docs, health
+from app.core.config import Settings, settings
+from app.core.db import session as db_session
+from app.core.discovery import discover_routers, import_discovered_models
+from app.core.errors import configure_sentry, register_exception_handlers
+from app.core.jobs.celery_app import load_tasks
+from app.core.logging import configure_logging, get_logger
+from app.core.middleware.correlation import CorrelationMiddleware
+from app.core.middleware.security import (
     RequestSizeLimitMiddleware,
     SecurityHeadersMiddleware,
     build_cors_kwargs,
 )
-from app.observability import (
+from app.core.observability import (
     configure_metrics,
     configure_tracing,
     instrument_app,
@@ -122,10 +123,16 @@ def create_app(config: Settings | None = None) -> FastAPI:
     health.register_readiness_check("storage", storage.ping)
 
     # --- routers -------------------------------------------------------------
+    # Infrastructure endpoints are mounted explicitly: they are part of the base,
+    # not features, and they must exist even if no plugin does.
     app.include_router(docs.router)
     app.include_router(health.router)
-    app.include_router(demo.router)
-    app.include_router(files.router)
+
+    # Feature routers are discovered. Any module under PLUGIN_PACKAGES exposing a
+    # module-level `router` is mounted, so adding an endpoint needs no edit here.
+    for module_name, router in discover_routers():
+        app.include_router(router)
+        log.info("router.mounted", module=module_name, prefix=router.prefix or "/")
 
     return app
 

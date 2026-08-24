@@ -1,0 +1,259 @@
+# Common Application Base -- local stack.
+# Grows one service per build phase; `docker compose up` must always work.
+name: common-app-base
+
+x-app-env: &app-env
+  APP_NAME: common-app-base
+  ENVIRONMENT: local
+  LOG_LEVEL: INFO
+  LOG_JSON: "true"
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: appuser
+  POSTGRES_PASSWORD: apppassword
+  POSTGRES_DB: appdb
+  # The app connects as the least-privilege runtime role, not the owner, so it
+  # cannot UPDATE/DELETE/TRUNCATE audit_log or drop the triggers that stop it.
+  POSTGRES_APP_USER: appruntime
+  POSTGRES_APP_PASSWORD: appruntimepassword
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  CACHE_TTL_SECONDS: "60"
+  # Empty by default: spans are still generated (so trace_id is real) but not
+  # shipped. Set to http://tempo:4318 together with `--profile tracing`.
+  OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_EXPORTER_OTLP_ENDPOINT:-}"
+  STORAGE_PROVIDER: minio
+  S3_ENDPOINT_URL: http://minio:9000
+  S3_PUBLIC_ENDPOINT_URL: http://localhost:9000
+  S3_ACCESS_KEY: minioadmin
+  S3_SECRET_KEY: minioadmin
+  S3_BUCKET: app-files
+
+services:
+  # --------------------------------------------------------------- app ------
+  app:
+    build:
+      context: ..
+      dockerfile: services/app/Dockerfile
+    image: common-app-base:local
+    container_name: cab-app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------- postgres ------
+  postgres:
+    image: postgres:16-alpine
+    container_name: cab-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: apppassword
+      POSTGRES_DB: appdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs once on a brand-new data directory: creates the least-privilege
+      # runtime role. Grants live in the Alembic migration -- see
+      # services/postgres/README.md.
+      - ../services/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U appuser -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ------------------------------------------------------------- redis ------
+  redis:
+    image: redis:7-alpine
+    container_name: cab-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", ""]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # -------------------------------------------------------------- loki ------
+  loki:
+    image: grafana/loki:3.3.2
+    container_name: cab-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki-config.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ../services/loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3100/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # ---------------------------------------------------------- promtail ------
+  promtail:
+    image: grafana/promtail:3.3.2
+    container_name: cab-promtail
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/promtail-config.yaml"]
+    volumes:
+      - ../services/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  # ------------------------------------------------------------ worker ------
+  worker:
+    build:
+      context: ..
+      dockerfile: services/app/Dockerfile
+    image: common-app-base:local
+    container_name: cab-worker
+    restart: unless-stopped
+    # `-q` is a *global* celery flag and must precede the subcommand. It
+    # suppresses the ASCII startup banner -- the only thing the worker prints
+    # that is not JSON, which Promtail cannot parse into fields.
+    command: ["celery", "-q", "-A", "app.core.jobs.celery_app:celery_app", "worker", "--loglevel=INFO", "--concurrency=2"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.core.jobs.celery_app:celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ------------------------------------------------------------- minio ------
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: cab-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # -------------------------------------------------------- prometheus ------
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: cab-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=7d"
+      - "--web.enable-lifecycle"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ../services/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:9090/-/healthy | grep -q Healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  # ------------------------------------------------------------- tempo ------
+  # Opt-in trace store: `docker compose --profile tracing up -d`.
+  # Left out of the default set so a plain `docker compose up` stays lean.
+  tempo:
+    image: grafana/tempo:2.7.0
+    container_name: cab-tempo
+    profiles: ["tracing"]
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo-config.yaml"]
+    ports:
+      - "${TEMPO_PORT:-3200}:3200"
+      - "4318:4318"
+    volumes:
+      - ../services/tempo/tempo-config.yaml:/etc/tempo/tempo-config.yaml:ro
+      - tempo-data:/var/tempo
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3200/ready | grep -q ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  # ----------------------------------------------------------- grafana ------
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: cab-grafana
+    restart: unless-stopped
+    ports:
+      # Host port is overridable: 3000 is commonly taken by other local tools.
+      - "${GRAFANA_PORT:-3001}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_FEATURE_TOGGLES_ENABLE: traceToMetrics
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ../services/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../services/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      loki:
+        condition: service_healthy
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:3000/api/health | grep -q ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+volumes:
+  minio-data:
+  tempo-data:
+  prometheus-data:
+  postgres-data:
+  redis-data:
+  loki-data:
+  grafana-data:

@@ -24,7 +24,7 @@ from collections.abc import Sequence
 
 from alembic import op
 
-from app.config import settings
+from app.core.config import settings
 
 revision: str = "a1f2c3d4e5b6"
 down_revision: str | None = "66fba9fbe2c9"

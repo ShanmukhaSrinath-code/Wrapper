@@ -19,8 +19,8 @@ import pytest
 @pytest.fixture(autouse=True)
 def _clean_context():
     """Isolate every test: contextvars survive across tests in one thread."""
-    from app.audit.context import clear_actor
-    from app.logging import clear_request_context
+    from app.core.audit.context import clear_actor
+    from app.core.logging import clear_request_context
 
     clear_request_context()
     clear_actor()
@@ -31,7 +31,7 @@ def _clean_context():
 
 def test_actor_is_read_from_context_without_being_passed() -> None:
     """A feature that never mentions the actor still records the real one."""
-    from app.audit.context import current_actor
+    from app.core.audit.context import current_actor
 
     bind_actor_principal()
     assert current_actor() is not None
@@ -39,22 +39,22 @@ def test_actor_is_read_from_context_without_being_passed() -> None:
 
 
 def bind_actor_principal() -> None:
-    from app.audit.context import bind_actor
-    from app.security.current_user import get_current_user
+    from app.core.audit.context import bind_actor
+    from app.core.security.current_user import get_current_user
 
     bind_actor(get_current_user())
 
 
 def test_unbound_actor_is_honest_rather_than_confident() -> None:
     """With nothing bound, the row must say so -- not invent a plausible id."""
-    from app.audit.context import current_actor_id
+    from app.core.audit.context import current_actor_id
 
     assert current_actor_id() == "unresolved"
 
 
 def test_write_audit_uses_the_context_actor(monkeypatch: pytest.MonkeyPatch) -> None:
     """The recorded actor_id comes from context, with no argument passed."""
-    import app.audit.writer as writer_mod
+    import app.core.audit.writer as writer_mod
 
     captured: dict[str, object] = {}
 
@@ -77,7 +77,7 @@ def test_write_audit_records_unresolved_when_no_actor_is_bound(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No silent 'anonymous'. An unknown actor is recorded as unknown."""
-    import app.audit.writer as writer_mod
+    import app.core.audit.writer as writer_mod
 
     captured: dict[str, object] = {}
 
@@ -94,8 +94,8 @@ def test_write_audit_records_unresolved_when_no_actor_is_bound(
 
 def test_explicit_actor_still_overrides_context() -> None:
     """The seam stays usable for system/impersonated actors."""
-    from app.audit.context import bind_actor, current_actor
-    from app.security.current_user import Principal
+    from app.core.audit.context import bind_actor, current_actor
+    from app.core.security.current_user import Principal
 
     bind_actor(Principal(id="dev", roles=["dev"]))
     bind_actor(Principal(id="system", roles=["batch"]))

@@ -29,7 +29,7 @@ MODEL_SOURCE = '''\
 
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.db.base import Base, UUIDPrimaryKeyMixin
+from app.core.db.base import Base, UUIDPrimaryKeyMixin
 
 
 class ProbeThing(UUIDPrimaryKeyMixin, Base):
@@ -61,8 +61,8 @@ def test_model_in_a_feature_package_is_discovered(feature_package: str) -> None:
 
 def test_discovered_model_reaches_base_metadata(feature_package: str) -> None:
     """Discovery imports the module, so the table is in Base.metadata."""
+    from app.core.db.base import Base
     from app.core.discovery import import_discovered_models
-    from app.db.base import Base
 
     import_discovered_models()
     assert "probe_thing" in Base.metadata.tables
@@ -72,7 +72,7 @@ def test_autogenerate_guard_blocks_a_drop_table() -> None:
     """A drop escaping autogenerate is refused unless explicitly allowed."""
     from alembic.operations import ops
 
-    from app.db.migration_guard import DestructiveMigrationError, reject_destructive_ops
+    from app.core.db.migration_guard import DestructiveMigrationError, reject_destructive_ops
 
     directive = ops.MigrationScript(
         rev_id="probe",
@@ -91,7 +91,7 @@ def test_autogenerate_guard_blocks_a_drop_column() -> None:
     """Dropping a column loses data just as surely as dropping a table."""
     from alembic.operations import ops
 
-    from app.db.migration_guard import DestructiveMigrationError, reject_destructive_ops
+    from app.core.db.migration_guard import DestructiveMigrationError, reject_destructive_ops
 
     directive = ops.MigrationScript(
         rev_id="probe",
@@ -107,7 +107,7 @@ def test_autogenerate_guard_allows_drops_when_explicitly_enabled() -> None:
     """The guard is a speed bump, not a wall -- a real drop stays possible."""
     from alembic.operations import ops
 
-    from app.db.migration_guard import reject_destructive_ops
+    from app.core.db.migration_guard import reject_destructive_ops
 
     directive = ops.MigrationScript(
         rev_id="probe",
@@ -123,7 +123,7 @@ def test_autogenerate_guard_ignores_additive_changes() -> None:
     import sqlalchemy as sa
     from alembic.operations import ops
 
-    from app.db.migration_guard import reject_destructive_ops
+    from app.core.db.migration_guard import reject_destructive_ops
 
     directive = ops.MigrationScript(
         rev_id="probe",

@@ -6,7 +6,7 @@ stub, they should still pass unchanged -- which is the point of the seam.
 
 from __future__ import annotations
 
-from app.security.current_user import (
+from app.core.security.current_user import (
     STUB_PRINCIPAL,
     CurrentUser,
     Principal,

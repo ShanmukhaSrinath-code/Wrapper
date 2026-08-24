@@ -1,7 +1,7 @@
 """Regression tests for Fix 1 -- Celery tasks must be discovered, not listed.
 
 The bug these pin down: ``celery_app`` carried a hardcoded
-``include=["app.jobs.tasks"]``. A task that lived anywhere else was never
+``include=["app.services.demo_tasks"]``. A task that lived anywhere else was never
 registered with the worker, yet the API happily returned ``201`` and a
 ``task_id`` for it. The job silently never ran.
 
@@ -25,7 +25,7 @@ PLUGIN_PATH = pathlib.Path(__file__).resolve().parents[2] / "app" / "services" /
 PLUGIN_SOURCE = '''\
 """Throwaway plugin used by the task-discovery regression test."""
 
-from app.jobs.celery_app import celery_app
+from app.core.jobs.celery_app import celery_app
 
 
 @celery_app.task(name="probe.discovered")
@@ -55,7 +55,7 @@ def test_task_in_services_package_is_discovered(plugin_module: str) -> None:
 def test_discovered_task_is_registered_with_celery(plugin_module: str) -> None:
     """Discovery actually imports the module, so Celery knows the task."""
     from app.core import discovery
-    from app.jobs.celery_app import celery_app
+    from app.core.jobs.celery_app import celery_app
 
     discovery.import_discovered_tasks()
     assert "probe.discovered" in celery_app.tasks
@@ -63,7 +63,7 @@ def test_discovered_task_is_registered_with_celery(plugin_module: str) -> None:
 
 def test_enqueue_rejects_an_unregistered_task_name() -> None:
     """No task id is handed out for work that cannot run."""
-    from app.jobs import UnknownTaskError, enqueue
+    from app.core.jobs import UnknownTaskError, enqueue
 
     with pytest.raises(UnknownTaskError) as excinfo:
         enqueue("nobody.registered.this")
@@ -74,7 +74,7 @@ def test_enqueue_rejects_an_unregistered_task_name() -> None:
 def test_enqueue_accepts_a_registered_task_name(plugin_module: str) -> None:
     """The guard rejects unknown names only -- it does not block real work."""
     from app.core import discovery
-    from app.jobs import enqueue
+    from app.core.jobs import enqueue
 
     discovery.import_discovered_tasks()
     # `apply` runs the task locally and synchronously: this asserts the guard

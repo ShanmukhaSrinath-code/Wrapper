@@ -2,13 +2,13 @@
 # Every target is safe to run from a clean checkout.
 
 SHELL := /usr/bin/env bash
-COMPOSE := docker compose -f deploy/compose/docker-compose.yml
+COMPOSE := docker compose -f deploy/docker-compose.yml
 UV := uv
 PY := $(UV) run
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install lint fmt typecheck run test test-unit test-integration test-e2e \
+.PHONY: help install lint lint-imports fmt typecheck run test test-unit test-integration test-e2e \
         up down logs ps migrate revision smoke build scan clean
 
 help: ## Show this help
@@ -22,9 +22,13 @@ install: ## Create the venv and install all dependencies
 	@# verify the interpreter and key imports before claiming the install worked.
 	$(PY) python scripts/verify_venv.py
 
-lint: ## ruff check + format check
+lint: ## ruff check + format check + architecture boundaries
 	$(PY) ruff check .
 	$(PY) ruff format --check .
+	$(PY) lint-imports
+
+lint-imports: ## Check the core/services boundary only
+	$(PY) lint-imports
 
 fmt: ## Auto-fix lint + format
 	$(PY) ruff check --fix .
@@ -67,7 +71,7 @@ revision: ## Autogenerate a migration: make revision m="add thing"
 	$(PY) alembic revision --autogenerate -m "$(m)"
 
 build: ## Build the application image
-	docker build -f deploy/docker/Dockerfile -t common-app-base:local .
+	docker build -f services/app/Dockerfile -t common-app-base:local .
 
 scan: ## Trivy dependency + image scan
 	trivy fs --scanners vuln,secret,misconfig --exit-code 1 --severity HIGH,CRITICAL .

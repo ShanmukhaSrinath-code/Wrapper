@@ -43,7 +43,7 @@ class _DeadRedis:
 @pytest.fixture(params=[RedisTimeoutError("timeout"), RedisConnectionError("refused")])
 def dead_client(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> _DeadRedis:
     """Patch the module's client factory to return a broken client."""
-    from app.cache import client as client_mod
+    from app.core.cache import client as client_mod
 
     dead = _DeadRedis(request.param)
     monkeypatch.setattr(client_mod, "get_client", lambda: dead)
@@ -52,7 +52,7 @@ def dead_client(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
 
 async def test_get_json_returns_none_instead_of_raising(dead_client: _DeadRedis) -> None:
     """A read failure is indistinguishable from a miss, which is the point."""
-    from app.cache import get_json
+    from app.core.cache import get_json
 
     assert await get_json("any-key") is None
     assert "get" in dead_client.calls
@@ -60,21 +60,21 @@ async def test_get_json_returns_none_instead_of_raising(dead_client: _DeadRedis)
 
 async def test_set_json_swallows_the_failure(dead_client: _DeadRedis) -> None:
     """Failing to populate a cache must not fail the request that computed it."""
-    from app.cache import set_json
+    from app.core.cache import set_json
 
     await set_json("any-key", {"value": 1}, 60)
     assert "set" in dead_client.calls
 
 
 async def test_delete_swallows_the_failure(dead_client: _DeadRedis) -> None:
-    from app.cache import delete
+    from app.core.cache import delete
 
     assert await delete("any-key") == 0
 
 
 async def test_get_or_set_falls_through_to_the_origin(dead_client: _DeadRedis) -> None:
     """The whole point: the caller still gets its answer, computed live."""
-    from app.cache import get_or_set
+    from app.core.cache import get_or_set
 
     calls = {"n": 0}
 
@@ -95,8 +95,8 @@ async def test_get_or_set_still_reports_a_hit_when_redis_works(
     """Degradation must not mask a working cache."""
     import json
 
-    from app.cache import client as client_mod
-    from app.cache import get_or_set
+    from app.core.cache import client as client_mod
+    from app.core.cache import get_or_set
 
     class _LiveRedis:
         async def get(self, *_: Any, **__: Any) -> str:
@@ -117,8 +117,8 @@ async def test_get_or_set_still_reports_a_hit_when_redis_works(
 
 async def test_unexpected_errors_are_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Only Redis transport failures degrade. A bug must still be loud."""
-    from app.cache import client as client_mod
-    from app.cache import get_json
+    from app.core.cache import client as client_mod
+    from app.core.cache import get_json
 
     class _BrokenClient:
         async def get(self, *_: Any, **__: Any) -> Any:

@@ -21,9 +21,10 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from types import ModuleType
+from typing import Any
 
-from app.config import settings
-from app.logging import get_logger
+from app.core.config import settings
+from app.core.logging import get_logger
 
 log = get_logger(__name__)
 
@@ -120,3 +121,27 @@ def import_discovered_models() -> list[str]:
     makes a forgotten registration impossible rather than merely discouraged.
     """
     return _import_all(discover_model_modules(), what="models")
+
+
+# --- routers -----------------------------------------------------------------
+
+
+def discover_routers() -> list[tuple[str, Any]]:
+    """Find every ``APIRouter`` exposed by a plugin module.
+
+    A feature is mounted by defining a module-level ``router``. There is no list
+    of routers to keep in step with reality, so adding an endpoint requires no
+    edit to ``app.main`` -- the last hand-maintained registry in the base.
+
+    Returns ``(module_name, router)`` pairs sorted by module name, so route
+    registration order is deterministic across processes and restarts.
+    """
+    from fastapi import APIRouter
+
+    found: list[tuple[str, Any]] = []
+    for module_name in _discover(settings.plugin_packages_list):
+        module = importlib.import_module(module_name)
+        router = getattr(module, "router", None)
+        if isinstance(router, APIRouter):
+            found.append((module_name, router))
+    return sorted(found, key=lambda pair: pair[0])

@@ -65,7 +65,7 @@ def test_verifier_lists_the_imports_it_requires() -> None:
     """The check must cover the app itself, not just third-party packages."""
     from scripts.verify_venv import REQUIRED_IMPORTS
 
-    assert "app.config" in REQUIRED_IMPORTS
+    assert "app.core.config" in REQUIRED_IMPORTS
     assert "alembic" in REQUIRED_IMPORTS, "alembic is what actually broke"
 
 
