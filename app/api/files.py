@@ -106,7 +106,6 @@ async def upload(
 
     await write_audit(
         "file.uploaded",
-        actor=user,
         resource_type="file",
         resource_id=str(file_id),
         http_method=request.method,

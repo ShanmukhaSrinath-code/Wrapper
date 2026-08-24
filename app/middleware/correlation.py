@@ -25,7 +25,9 @@ from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.audit.context import bind_actor, clear_actor
 from app.logging import bind_request_context, clear_request_context, get_logger
+from app.security.current_user import get_current_user
 
 REQUEST_ID_HEADER = "X-Request-ID"
 TRACE_ID_HEADER = "X-Trace-ID"
@@ -65,6 +67,7 @@ class CorrelationMiddleware:
         method = scope.get("method", "")
 
         clear_request_context()
+        clear_actor()
         started = time.perf_counter()
         status_code = 500
 
@@ -74,6 +77,11 @@ class CorrelationMiddleware:
             span_id = format(ctx.span_id, "016x") if ctx.span_id else None
 
             bind_request_context(request_id=request_id, trace_id=trace_id, span_id=span_id)
+            # Bind the acting principal the same way as the ids, so audit rows
+            # written anywhere in this request are attributed without the call
+            # site having to pass an actor. When real auth replaces the stub,
+            # this line keeps working unchanged.
+            bind_actor(get_current_user())
             span.set_attribute("request.id", request_id)
             _tag_sentry(request_id, trace_id)
 
@@ -124,6 +132,7 @@ class CorrelationMiddleware:
                     )
 
         clear_request_context()
+        clear_actor()
 
 
 def _tag_sentry(request_id: str, trace_id: str | None) -> None:

@@ -60,7 +60,8 @@ def _walk_package(package_name: str) -> list[str]:
         raise PluginImportError(f"Plugin module {failed!r} failed to import during discovery.")
 
     found: list[str] = []
-    for info in pkgutil.walk_packages(package.__path__, prefix=f"{package_name}.", onerror=_onerror):
+    walker = pkgutil.walk_packages(package.__path__, prefix=f"{package_name}.", onerror=_onerror)
+    for info in walker:
         leaf = info.name.rpartition(".")[2]
         if leaf.startswith("__"):
             continue

@@ -83,7 +83,6 @@ async def audited(
     """
     entry = await write_audit(
         "demo.audited",
-        actor=user,
         resource_type="demo",
         resource_id="audited",
         http_method=request.method,
@@ -107,7 +106,7 @@ async def boom(user: CurrentUser) -> dict[str, Any]:
     the `internal_error` path: 500, no stack trace to the caller, logged with
     its request_id, and captured by Sentry when a DSN is configured.
     """
-    await write_audit("demo.boom", actor=user, resource_type="demo", outcome="failure")
+    await write_audit("demo.boom", resource_type="demo", outcome="failure")
     return {"never": 1 / 0}
 
 
@@ -145,11 +144,7 @@ async def enqueue_job(
     """
     # `enqueue` refuses names nobody registered, so this route cannot return a
     # task id for work that will never run.
-    task = (
-        enqueue("demo.always_fails")
-        if fail
-        else enqueue("demo.slow_add", a, b, delay_seconds)
-    )
+    task = enqueue("demo.always_fails") if fail else enqueue("demo.slow_add", a, b, delay_seconds)
     return JobAccepted(task_id=task.id, status="queued", request_id=current_request_id())
 
 

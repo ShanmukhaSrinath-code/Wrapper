@@ -20,14 +20,17 @@ from typing import Any
 
 from celery import Celery
 from celery.signals import (
-    import_modules as celery_on_after_configure,
     before_task_publish,
     setup_logging,
     task_failure,
     task_postrun,
     task_prerun,
 )
+from celery.signals import (
+    import_modules as celery_on_after_configure,
+)
 
+from app.audit.context import bind_actor, clear_actor, current_actor
 from app.config import settings
 from app.logging import (
     bind_request_context,
@@ -37,11 +40,19 @@ from app.logging import (
     current_trace_id,
     get_logger,
 )
+from app.security.current_user import Principal
 
 log = get_logger(__name__)
 
+
+def _split_roles(raw: str | None) -> list[str]:
+    return [r for r in (raw or "").split(",") if r]
+
+
 REQUEST_ID_HEADER = "x_request_id"
 TRACE_ID_HEADER = "x_trace_id"
+ACTOR_ID_HEADER = "x_actor_id"
+ACTOR_ROLES_HEADER = "x_actor_roles"
 
 celery_app = Celery(
     "common-app-base",
@@ -92,14 +103,27 @@ def _propagate_context(headers: dict[str, Any] | None = None, **_: Any) -> None:
     if trace_id:
         headers[TRACE_ID_HEADER] = trace_id
 
+    # The acting principal rides along too, so an audit row written inside the
+    # task is attributed to the person who triggered it rather than to the
+    # worker process.
+    actor = current_actor()
+    if actor is not None:
+        headers[ACTOR_ID_HEADER] = actor.id
+        headers[ACTOR_ROLES_HEADER] = ",".join(actor.roles)
+
 
 @task_prerun.connect
 def _bind_context(task_id: str | None = None, task: Any = None, **_: Any) -> None:
     """Rebind the originating ids inside the worker before the task runs."""
     clear_request_context()
+    clear_actor()
     request = getattr(task, "request", None)
     request_id = getattr(request, REQUEST_ID_HEADER, None) if request else None
     trace_id = getattr(request, TRACE_ID_HEADER, None) if request else None
+    actor_id = getattr(request, ACTOR_ID_HEADER, None) if request else None
+    actor_roles = getattr(request, ACTOR_ROLES_HEADER, None) if request else None
+    if actor_id:
+        bind_actor(Principal(id=actor_id, roles=_split_roles(actor_roles)))
 
     bind_request_context(
         # Fall back to the Celery task id so a task published outside a request
@@ -116,6 +140,7 @@ def _bind_context(task_id: str | None = None, task: Any = None, **_: Any) -> Non
 def _unbind_context(task_id: str | None = None, state: str | None = None, **_: Any) -> None:
     log.info("task.finished", task_id=task_id, task_state=state)
     clear_request_context()
+    clear_actor()
 
 
 @task_failure.connect

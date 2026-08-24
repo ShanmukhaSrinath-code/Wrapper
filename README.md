@@ -71,7 +71,7 @@ downstream inherits them automatically:
 |---|---|---|
 | **Logs** | Every JSON line carries `request_id` / `trace_id` — including uvicorn, SQLAlchemy and Celery lines, because stdlib logging is routed through the same pipeline | Grafana → Explore → Loki:<br>`{service="app"} \| json \| request_id = "<id>"` |
 | **Traces** | The middleware's span is the request's root span | Tempo (`tracing` profile), or click *View trace* on a log line |
-| **Audit** | `write_audit()` reads the ids from context — no call site can forget them | `SELECT * FROM audit_log WHERE request_id = '<id>'` |
+| **Audit** | `write_audit()` reads the ids **and the acting principal** from context — no call site can forget them | `SELECT * FROM audit_log WHERE request_id = '<id>'` |
 | **Metrics** | Labelled by route/method/status **only**. Ids are deliberately *not* labels: they are unbounded and would destroy cardinality | Prometheus / the provisioned Grafana dashboard |
 | **Errors** | Every error response is `{error, message, request_id, trace_id}`; Sentry events are tagged with both | Sentry, filtered by the `request_id` tag |
 | **Jobs** | Ids ride on the Celery message headers and are rebound inside the worker, so a task logs under the request that enqueued it | `docker logs cab-worker \| grep <id>` |
@@ -185,7 +185,11 @@ async def create(user: CurrentUser, session: DbSession) -> Thing: ...
 To add real auth, change **only that one file**: validate the bearer token
 against the Entra ID JWKS, map the claims onto `Principal`, and enforce a Casbin
 policy. No route signature moves, and audit rows start recording real actors
-immediately, because `write_audit` already takes the principal.
+immediately, because the correlation middleware binds whatever
+`get_current_user()` returns into the audit context — see
+[`app/audit/context.py`](app/audit/context.py). A row written by a feature that
+never mentions an actor is still attributed correctly; if nothing is bound it
+records `unresolved` and logs a warning rather than inventing `anonymous`.
 
 ---
 

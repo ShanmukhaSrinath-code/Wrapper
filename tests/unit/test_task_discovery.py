@@ -49,9 +49,7 @@ def test_task_in_services_package_is_discovered(plugin_module: str) -> None:
     from app.core import discovery
 
     found = discovery.discover_task_modules()
-    assert plugin_module in found, (
-        f"{plugin_module} was not auto-discovered; found={sorted(found)}"
-    )
+    assert plugin_module in found, f"{plugin_module} was not auto-discovered; found={sorted(found)}"
 
 
 def test_discovered_task_is_registered_with_celery(plugin_module: str) -> None:

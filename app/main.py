@@ -16,9 +16,9 @@ from app import __version__, cache, storage
 from app.api import demo, docs, files, health
 from app.config import Settings, settings
 from app.core.discovery import import_discovered_models
-from app.jobs.celery_app import load_tasks
 from app.db import session as db_session
 from app.errors import configure_sentry, register_exception_handlers
+from app.jobs.celery_app import load_tasks
 from app.logging import configure_logging, get_logger
 from app.middleware.correlation import CorrelationMiddleware
 from app.middleware.security import (
