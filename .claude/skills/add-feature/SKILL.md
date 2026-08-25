@@ -112,8 +112,7 @@ log = get_logger(__name__)
 
 
 @celery_app.task(name="invoices.render_pdf", bind=True)
-def render_pdf(self: Any, invoice_id: str) -> dict[str, Any]:
-    ...
+def render_pdf(self: Any, invoice_id: str) -> dict[str, Any]: ...
 ```
 
 - **Task bodies are synchronous.** A Celery worker is not an event loop. To use

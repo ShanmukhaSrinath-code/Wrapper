@@ -87,14 +87,14 @@ attribution, health probes, task retries.
 ## Import these, not the implementations
 
 ```python
-from app.core.db.session import DbSession          # route dependency
-from app.core.db import Base                       # model base
-from app.core import cache                         # get_json / set_json / get_or_set
-from app.core.storage import get_storage           # the Storage interface
-from app.core.jobs import enqueue                  # verifies the task is registered
-from app.core.audit import write_audit             # actor + ids come from context
-from app.core.errors import NotFoundError          # and friends
-from app.core.logging import get_logger            # log = get_logger(__name__)
+from app.core.db.session import DbSession  # route dependency
+from app.core.db import Base  # model base
+from app.core import cache  # get_json / set_json / get_or_set
+from app.core.storage import get_storage  # the Storage interface
+from app.core.jobs import enqueue  # verifies the task is registered
+from app.core.audit import write_audit  # actor + ids come from context
+from app.core.errors import NotFoundError  # and friends
+from app.core.logging import get_logger  # log = get_logger(__name__)
 from app.core.security.current_user import CurrentUser
 ```
 
