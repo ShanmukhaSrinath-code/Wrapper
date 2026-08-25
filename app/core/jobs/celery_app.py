@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from celery import Celery
+from botocore.exceptions import BotoCoreError
+from celery import Celery, Task
 from celery.signals import (
     before_task_publish,
     setup_logging,
@@ -29,6 +30,7 @@ from celery.signals import (
 from celery.signals import (
     import_modules as celery_on_after_configure,
 )
+from sqlalchemy.exc import OperationalError
 
 from app.core.audit.context import bind_actor, clear_actor, current_actor
 from app.core.config import settings
@@ -54,8 +56,44 @@ TRACE_ID_HEADER = "x_trace_id"
 ACTOR_ID_HEADER = "x_actor_id"
 ACTOR_ROLES_HEADER = "x_actor_roles"
 
+#: Failures worth trying again: something outside the process was briefly
+#: unavailable. A bug in the task body is *not* here -- retrying a TypeError
+#: burns the queue to arrive at the identical failure three more times.
+TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (
+    ConnectionError,  # includes redis.ConnectionError and kombu's, which subclass it
+    TimeoutError,
+    OSError,  # socket-level failures, DNS, broken pipes
+    OperationalError,  # SQLAlchemy: connection dropped, pool exhausted, deadlock
+    BotoCoreError,  # object store unreachable, throttled or timing out
+)
+
+
+class BaseTask(Task):
+    """The default base for **every** task in this codebase.
+
+    Set as ``celery_app.Task``, so a feature gets the retry policy by existing
+    rather than by remembering to ask for it. A task that genuinely wants
+    different behaviour overrides these attributes in its own decorator.
+
+    ``retry_backoff`` spaces attempts exponentially and ``retry_jitter``
+    scatters them: without jitter, every task that failed during an outage
+    retries in lockstep the moment it ends, and knocks the dependency over
+    again.
+    """
+
+    autoretry_for = TRANSIENT_ERRORS
+    retry_backoff = True
+    retry_backoff_max = settings.task_retry_backoff_max_seconds
+    retry_jitter = True
+    max_retries = settings.task_max_retries
+    #: Report the retry in the result backend, so a caller polling the task id
+    #: sees RETRY rather than a task that appears to be hanging.
+    track_started = True
+
+
 celery_app = Celery(
     "common-app-base",
+    task_cls=BaseTask,
     broker=settings.broker_url,
     backend=settings.result_backend,
     # No `include=[...]`: task modules are discovered, not listed. See

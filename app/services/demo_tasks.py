@@ -76,5 +76,30 @@ def slow_add(self: Any, a: int, b: int, delay_seconds: float = 2.0) -> dict[str,
 
 @celery_app.task(name="demo.always_fails")
 def always_fails() -> None:
-    """Fail on purpose, to prove failures are logged and reported with their ids."""
+    """Fail on purpose, to prove failures are logged and reported with their ids.
+
+    A `RuntimeError` is a bug, not a blip, so the base retry policy leaves it
+    alone: it fails once, immediately.
+    """
     raise RuntimeError("This task always fails, by design.")
+
+
+@celery_app.task(name="demo.flaky", bind=True)
+def flaky(self: Any, fail_times: int = 2) -> dict[str, Any]:
+    """Fail transiently `fail_times` times, then succeed -- the retry policy, visible.
+
+    Nothing here configures retries. `ConnectionError` is in the base task's
+    `autoretry_for`, so Celery re-queues this with exponential backoff and
+    jitter; the task id stays the same, so a caller polling it watches
+    `RETRY -> RETRY -> SUCCESS`.
+    """
+    attempt = self.request.retries
+    log.info("flaky.attempt", attempt=attempt, fail_times=fail_times)
+    if attempt < fail_times:
+        raise ConnectionError(f"transient failure {attempt + 1} of {fail_times}")
+    return {
+        "attempts": attempt + 1,
+        "retries": attempt,
+        "task_id": self.request.id,
+        "request_id": current_request_id(),
+    }

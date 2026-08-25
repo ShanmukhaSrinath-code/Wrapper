@@ -106,6 +106,12 @@ class Settings(BaseSettings):
     # --- celery --------------------------------------------------------------
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
+    #: How many times a task retries a *transient* failure before giving up.
+    #: Capped deliberately: an uncapped retry turns one poisoned message into a
+    #: permanent load source that outlives the incident that caused it.
+    task_max_retries: int = 3
+    #: Ceiling on the exponential backoff between retries, in seconds.
+    task_retry_backoff_max_seconds: int = 60
 
     # --- plugin discovery ----------------------------------------------------
     # Where features live. Anything importable under these packages has its
