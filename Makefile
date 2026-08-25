@@ -38,7 +38,8 @@ typecheck: ## mypy
 	$(PY) mypy app
 
 run: ## Run the API locally (reload)
-	$(PY) uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \n	  --no-server-header --proxy-headers --forwarded-allow-ips '*'
+	$(PY) uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload \
+	  --no-server-header --proxy-headers --forwarded-allow-ips '*'
 
 test: ## Full test suite with coverage gate
 	$(PY) pytest --cov=app --cov-report=term-missing --cov-fail-under=80
