@@ -24,7 +24,12 @@ from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import Settings
-from app.core.logging import current_request_id, current_trace_id, get_logger
+from app.core.logging import (
+    current_request_id,
+    current_trace_id,
+    get_logger,
+    mark_traceback_logged,
+)
 from app.core.middleware.security import apply_security_headers
 
 log = get_logger(__name__)
@@ -175,6 +180,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _db(request: Request, exc: SQLAlchemyError) -> JSONResponse:
         # Driver messages can leak schema and even data -- log them, never return them.
         log.exception("request.database_error", http_path=request.url.path)
+        mark_traceback_logged(exc)
         sentry_sdk.capture_exception(exc)
         return _render(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -191,6 +197,10 @@ def register_exception_handlers(app: FastAPI) -> None:
             http_method=request.method,
             exception_type=type(exc).__name__,
         )
+        # This is the one place the stack is recorded. Tell the layers above --
+        # ServerErrorMiddleware re-raises and uvicorn logs it again -- to stay
+        # quiet about this particular exception.
+        mark_traceback_logged(exc)
         sentry_sdk.capture_exception(exc)
         return _render(
             status.HTTP_500_INTERNAL_SERVER_ERROR,

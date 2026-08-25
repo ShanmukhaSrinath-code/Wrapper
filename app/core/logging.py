@@ -9,6 +9,7 @@ See the Correlation Contract in README.md.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 from typing import Any
@@ -88,6 +89,8 @@ def configure_logging() -> None:
         )
     )
 
+    handler.addFilter(DropAlreadyLoggedTraceback())
+
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level)
@@ -100,6 +103,42 @@ def configure_logging() -> None:
     # uvicorn.access duplicates what our own middleware logs, with none of the
     # correlation ids -- silence it and keep the structured line instead.
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
+# --------------------------------------------------------------------------
+# Traceback de-duplication
+# --------------------------------------------------------------------------
+#: Set on an exception object once its traceback has been logged with the
+#: correlation ids. Layers above us -- Starlette's ServerErrorMiddleware
+#: re-raises, and uvicorn then logs "Exception in ASGI application" -- would
+#: otherwise print the same stack again, with no ids, in a different format.
+_LOGGED_FLAG = "_cab_traceback_logged"
+
+
+def mark_traceback_logged(exc: BaseException) -> None:
+    """Record that this exception's stack has already been logged, once."""
+    # Some exception types forbid attribute assignment; missing the flag only
+    # costs a duplicate traceback, so it is not worth failing the request over.
+    with contextlib.suppress(Exception):
+        object.__setattr__(exc, _LOGGED_FLAG, True)
+
+
+def traceback_already_logged(exc: BaseException) -> bool:
+    return bool(getattr(exc, _LOGGED_FLAG, False))
+
+
+class DropAlreadyLoggedTraceback(logging.Filter):
+    """Drop records repeating a traceback we have already emitted.
+
+    Deliberately keyed on the **exception object**, not on the logger name or
+    the message: an exception nobody logged still gets its stack printed, which
+    is what makes this safe. Losing the only copy of a traceback would be a far
+    worse bug than printing it twice.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        exc = record.exc_info[1] if record.exc_info else None
+        return not (exc is not None and traceback_already_logged(exc))
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

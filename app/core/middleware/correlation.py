@@ -103,23 +103,19 @@ class CorrelationMiddleware:
                         headers.setdefault(TRACE_ID_HEADER, trace_id)
                 await send(message)
 
+            # No `except` that logs: the exception handler in app.core.errors is
+            # the single place a failure's traceback is recorded. This
+            # middleware used to log it too, so one bug arrived three times --
+            # here, there, and again from uvicorn. `request.completed` below
+            # still reports the 500 with its duration and ids.
+            #
+            # Note there is deliberately no context clearing on the error path
+            # either: Starlette's ServerErrorMiddleware sits *outside* this
+            # middleware, so the 500 handler runs after the exception
+            # propagates -- clearing here would strip request_id from the very
+            # error response that needs it. The next request clears on entry.
             try:
                 await self.app(scope, receive, send_with_headers)
-            except Exception:
-                # Log here so the failure carries its ids even if the exception
-                # escapes every handler, then let it propagate.
-                log.exception(
-                    "request.failed",
-                    http_method=method,
-                    http_path=path,
-                    duration_ms=round((time.perf_counter() - started) * 1000, 2),
-                )
-                # Deliberately do NOT clear the context here. Starlette's
-                # ServerErrorMiddleware sits *outside* this middleware, so the
-                # 500 handler runs after this `raise` -- clearing now would
-                # strip request_id from the very error response that needs it.
-                # The next request clears the context on entry anyway.
-                raise
             finally:
                 if path not in _QUIET_PATHS:
                     log.info(
