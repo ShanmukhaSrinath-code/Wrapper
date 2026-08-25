@@ -6,6 +6,11 @@
 **Baseline:** `22319b3` — verdict **NOT READY** (1 zero-tolerance failure, 2 blockers, 5 major, 5 minor).
 The original audit is preserved verbatim in [TEST_REPORT_BASELINE.md](TEST_REPORT_BASELINE.md).
 
+**Update, 2026-08-25 (`HARDEN_BRIEF.md`):** the five defects left out of scope by
+`SOLIDIFY_BRIEF.md` are now closed as well, and the base is prod-ready rather
+than merely structurally sound. See [Hardening pass](#hardening-pass-2026-08-25)
+below; the defect table at the end is updated in place.
+
 ---
 
 # VERDICT: READY
@@ -19,8 +24,8 @@ module.
 |---|---|---|
 | Base edits to add a feature | **3 files, 5 lines** (2 in protected modules) | **0 files, 0 lines** |
 | Hand-maintained registries | 3 (routers, tasks, models) | **0** |
-| Tests | 116 | **158** |
-| Coverage | 86.84% | **88.33%** |
+| Tests | 116 | **184** (158 after the solidify pass) |
+| Coverage | 86.84% | **88.91%** |
 | Worker log lines that are not JSON | 17 of 31 | **0 of 6** |
 | Suite passes twice, identically | yes | yes |
 
@@ -752,39 +757,323 @@ Covered under D5: suite and smoke green, `git status` clean, empty diff.
 | 3 | Major | Audit actor silently `anonymous` | **Fixed** — contextvar, bound by middleware, carried across the Celery hop |
 | 4 | Major | `TRUNCATE` bypasses append-only | **Fixed** — statement-level trigger + least-privilege role that owns nothing |
 | 5 | Major | Cache outage becomes a full outage | **Fixed** — narrow degradation to a miss; bugs still propagate |
-| 6 | Major | CORS wide open by default | **Out of scope** for this brief |
-| 7 | Major | Dev credentials as field defaults, no prod guard | **Out of scope** for this brief |
+| 6 | Major | CORS wide open by default | **Fixed** (2026-08-25) — deny by default; `*` is an explicit opt-in |
+| 7 | Major | Dev credentials as field defaults, no prod guard | **Fixed** (2026-08-25) — non-local env refuses to start on a shipped default |
 | 8 | Minor | `make install` not self-healing | **Fixed** — `verify_venv.py` |
-| 9 | Minor | One exception → three error log records | **Out of scope** |
+| 9 | Minor | One exception → three error log records | **Fixed** (2026-08-25) — one traceback, at one place |
 | 10 | Minor | Worker emits non-JSON banner lines | **Fixed** — `-q` + logging configured before discovery; 0 non-JSON |
-| 11 | Minor | Chunked over-limit returns 400, not 413 | **Out of scope** |
-| 12 | Minor | No retry policy demonstrated | **Out of scope** |
+| 11 | Minor | Chunked over-limit returns 400, not 413 | **Fixed** (2026-08-25) — 413 in the standard schema |
+| 12 | Minor | No retry policy demonstrated | **Fixed** (2026-08-25) — policy on the base task, inherited by every task |
 
-**Both blockers, three of five majors and two of five minors are fixed.**
+**All twelve defects are fixed.** Both blockers and three majors under
+`SOLIDIFY_BRIEF.md`; the remaining two majors and three minors under
+`HARDEN_BRIEF.md` on 2026-08-25.
 
 `SOLIDIFY_BRIEF.md` specified exactly six fixes (the two blockers, majors 3–5, and
 minor 8). Defects 6, 7, 9, 11 and 12 were not in its scope and were deliberately
 left alone rather than silently expanded into. #10 was fixed only because the
 reorg's log-shipping work made it a one-line consequence.
 
-**None of them blocks the READY verdict**, which turns on the zero-tolerance
-criterion (zero base edits to add a feature) and on the no-regression sweep. They
-remain worth doing, in this order:
-
-1. **#7 — prod credential guard** (highest value): a `model_validator` rejecting
-   dev defaults when `environment != "local"`. Today `ENVIRONMENT=prod` still boots
-   with `postgres_password="apppassword"`.
-2. **#6 — CORS default**: change `cors_allow_origins` from `"*"` to deny, making
-   the wildcard an explicit opt-in. The mechanism is correct; only the default is
-   wrong.
-3. **#9, #11, #12** — log-volume and ergonomics polish.
+All five were closed on 2026-08-25 under `HARDEN_BRIEF.md`; the evidence is in
+the hardening pass above.
 
 ---
+
+
+---
+
+# HARDENING PASS (2026-08-25)
+
+`SOLIDIFY_BRIEF.md` proved the *structure*. This pass closes the five defects it
+left out of scope, all of them configuration or observability rather than
+architecture. Same discipline: a failing test first, then the fix.
+
+**Result: 184 tests (was 158), 88.91% coverage, suite identical across two runs.**
+
+| Defect | Was | Now |
+|---|---|---|
+| #7 prod credentials | `ENVIRONMENT=prod` booted on `apppassword` | startup **refuses**, naming every offending field |
+| #6 CORS | `*` by default | deny by default; `*` must be typed |
+| stale docstring | "include its router in `app/main.py`" | corrected, and pinned by a grep test |
+| #9 error logs | 3 records, 3 tracebacks per exception | 1 error record, 1 traceback |
+| #11 chunked over-limit | `400 "error parsing the body"` | `413 payload_too_large` in the standard schema |
+| #12 retries | none | policy on the base task, inherited by every task |
+
+## #7 - a deployed environment cannot run on the local secrets
+
+### Red
+
+```
+$ pytest tests/unit/test_prod_credentials_guard.py -q
+FAILED ...::test_deployed_environments_reject_dev_defaults[dev]
+FAILED ...::test_deployed_environments_reject_dev_defaults[staging]
+FAILED ...::test_deployed_environments_reject_dev_defaults[prod]
+FAILED ...::test_the_guard_is_derived_not_a_hand_maintained_list
+E   ImportError: cannot import name 'dev_default_secret_fields' from 'app.core.config'
+```
+
+### Green
+
+```
+$ pytest tests/unit/test_prod_credentials_guard.py -q
+....                                                                     [100%]
+```
+
+### Proof against the built image
+
+```
+$ docker run --rm -e ENVIRONMENT=prod --entrypoint python common-app-base:local -c "import app.main"
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+  Value error, ENVIRONMENT='prod' is still using the local development defaults
+  for: postgres_app_password, postgres_password, s3_access_key, s3_secret_key.
+  Set each one from your secret store (see SECRETS_PROVIDER) before deploying.
+exit=1
+
+$ docker run --rm -e ENVIRONMENT=prod -e POSTGRES_PASSWORD=real-pw \
+    -e POSTGRES_APP_PASSWORD=real-app-pw -e S3_ACCESS_KEY=real-key \
+    -e S3_SECRET_KEY=real-secret --entrypoint python common-app-base:local -c "..."
+booted in prod
+
+$ docker run --rm --entrypoint python common-app-base:local -c "..."
+booted in local
+```
+
+The guarded field set is **derived from the model** -- a field whose name looks
+like a credential and whose default is a non-empty string -- so a secret added
+next year is covered the day it is added. A locator (`azure_key_vault_url`) is
+not a secret and is excluded, which the test pins.
+
+## #6 - CORS denies by default
+
+### Red
+
+```
+$ pytest tests/unit/test_cors_default.py -q
+FAILED ...::test_cors_denies_by_default              assert ['*'] == []
+FAILED ...::test_the_shipped_env_example_does_not_enable_wildcard_cors
+FAILED ...::test_default_config_blocks_a_cross_origin_browser   assert not True
+```
+
+### Green
+
+```
+$ pytest tests/unit/test_cors_default.py -q
+.......                                                                  [100%]
+```
+
+The behavioural tests drive a real `CORSMiddleware` and check whether a browser
+at a given origin would be allowed to read the response -- not just what the
+settings object holds. `.env.example` ships denied too, since that is the file
+people copy.
+
+```
+$ docker exec cab-app python -c "from app.core.config import settings; print(settings.cors_origins_list)"
+[]
+```
+
+## Stale docstring
+
+### Red
+
+```
+$ pytest tests/unit/test_docs_tell_the_truth.py -q
+E   AssertionError: Stale 'edit main.py' instructions:
+E     app/services/__init__.py:9: or a package in here, include its router in ``app/main.py``
+```
+
+### Green
+
+```
+$ pytest tests/unit/test_docs_tell_the_truth.py -q
+..                                                                       [100%]
+```
+
+The test greps `app/`, `README.md` and `ARCHITECTURE.md`, so the docs cannot
+drift back. The docstring now also records the one step discovery genuinely
+cannot do: `make revision` + `make migrate` for a new model.
+
+## #9 - one exception, one traceback
+
+### Red
+
+```
+$ pytest tests/unit/test_single_error_record.py -q
+E   AssertionError: expected one traceback, got ['request.failed', 'request.unhandled_exception']
+E   ImportError: cannot import name 'DropAlreadyLoggedTraceback' from 'app.core.logging'
+```
+
+### Green
+
+```
+$ pytest tests/unit/test_single_error_record.py -q
+..                                                                       [100%]
+```
+
+### Under uvicorn, in the container
+
+```
+$ curl -H "X-Request-ID: ONE-ERROR-1787634194" localhost:8000/demo/boom
+$ docker logs cab-app | grep ONE-ERROR-1787634194
+
+ info  audit.written                    traceback=False
+ info  request.completed                traceback=False
+error  request.unhandled_exception      traceback=True     <- the only one
+```
+
+Baseline was three tracebacks (middleware, handler, uvicorn). Uvicorn's copy is
+dropped by a filter keyed on the **exception object**, not on a logger name or a
+message string -- so an exception nobody logged still gets its stack printed.
+Losing the only copy of a traceback would be a worse bug than printing one twice;
+`test_an_unlogged_exception_keeps_its_traceback` pins that.
+
+## #11 - an over-limit chunked body is 413
+
+### Red
+
+```
+$ pytest tests/unit/test_chunked_size_limit.py -q
+E   assert 500 == 413
+E   AssertionError: assert 'internal_error' == 'payload_too_large'
+```
+
+### Green
+
+```
+$ pytest tests/unit/test_chunked_size_limit.py -q
+....                                                                     [100%]
+```
+
+### Against the running stack -- 12 MiB, no `Content-Length`
+
+```
+HTTP 413
+{"error":"payload_too_large",
+ "message":"Request body exceeds the 10485760 byte limit.",
+ "request_id":"0509631a-13f7-493c-8921-0823afb5c135",
+ "trace_id":"32cff49d7d05468355d5d87d873709ab"}
+```
+
+Memory was always bounded; the status code was the lie. The induced disconnect
+is now internal: the app's confused response to a truncated body is dropped and
+the real reason is sent. The induced exception is swallowed **only** when we
+induced it.
+
+## #12 - every task retries transient failures
+
+### Red
+
+```
+$ pytest tests/unit/test_retry_policy.py -q
+E   ImportError: cannot import name 'BaseTask' from 'app.core.jobs.celery_app'
+```
+
+### Green
+
+```
+$ pytest tests/unit/test_retry_policy.py -q
+.....                                                                    [100%]
+```
+
+### On the real worker
+
+```
+$ enqueue('demo.flaky', 2)
+task_id 81bfd7ea-799e-40a7-baad-12fa73df09bb
+result  {'attempts': 3, 'retries': 2, ...}          <- RETRY, RETRY, SUCCESS
+
+worker log:
+  flaky.attempt attempt=0
+  Task demo.flaky[81bfd...] retry: Retry in 0s: ConnectionError('transient failure 1 of 2')
+  flaky.attempt attempt=1
+  Task demo.flaky[81bfd...] retry: Retry in 0s: ConnectionError('transient failure 2 of 2')
+  flaky.attempt attempt=2                            <- succeeds
+
+$ enqueue('demo.flaky', 99)                          # never recovers
+final state FAILURE
+error       ConnectionError('transient failure 4 of 99')   <- 1 attempt + 3 retries, capped
+```
+
+The policy lives on the base task class (`celery_app`'s `task_cls`), so a
+feature inherits it by existing. Bugs are deliberately excluded: a `TypeError`
+fails once, immediately, because retrying it reaches the identical failure three
+more times.
+
+---
+
+# RE-VERIFICATION AFTER HARDENING
+
+## Suite, twice, identical
+
+```
+run 1   184 passed   coverage 88.91%
+run 2   184 passed   coverage 88.91%
+```
+
+## No-regression sweep
+
+| Control | Result |
+|---|---|
+| Correlation smoke (logs -> trace -> audit -> metric -> error, one request_id) | `SMOKE PASSED` |
+| Readiness names the failing dep (Postgres down) | `503` + `"postgres":"error: timeout after 3s"`, liveness `200` |
+| Readiness names the failing dep (Redis down) | `503` + `"redis":"error: timeout after 3s"` |
+| Redis down -> cached route still serves | `GET /demo/cached` -> `200` (degraded) |
+| Audit rejects UPDATE / DELETE / TRUNCATE as the app role | all three `permission denied for table audit_log` |
+| Audit trigger cannot be dropped by the app role | `must be owner of relation audit_log` |
+| Audit still writable/readable | 174 rows, INSERT+SELECT fine |
+| Trivy gate, clean tree | `exit 0` |
+| Trivy gate, planted GitHub PAT | `CRITICAL: GitHub (github-pat)`, `exit 1` |
+| Trivy image scan | `common-app-base:local (debian 12.15)` - 0 vulnerabilities, `exit 0` |
+
+> Note on the secret control: a planted **AWS documentation example key** is
+> *not* flagged, and that is Trivy being right rather than the gate being weak.
+> The control uses a realistic GitHub PAT.
+
+## Seam intact - the docs POC, re-run on the hardened base
+
+```
+$ git status --porcelain
+?? app/services/docs/
+?? migrations/versions/20260825_1040_poc_document_table.py
+?? tests/unit/test_docs_poc.py
+
+app/core edits: 0
+```
+
+Round trip on the running stack:
+
+```
+POST /documents          -> 201 {"id":"df4fcc2c-...","task_id":"f7ac7d89-..."}
+GET  /documents/{id}     -> {"status":"done","word_count":1427,"cached":true}
+
+audit_log for request_id POC2-1787634662:
+  document.uploaded | dev | POC2-1787634662
+  document.counted  | dev | POC2-1787634662      <- written inside the Celery task
+```
+
+The feature's task also inherits the new retry policy without asking
+(`test_the_feature_task_inherits_the_retry_policy`).
+
+### Clean removal
+
+```
+$ alembic downgrade -1 && rm -rf app/services/docs ...
+$ git status --porcelain
+                                          <- empty
+$ pytest -q            184 passed
+$ curl -X POST localhost:8000/documents   -> 404
+```
 
 # FINAL STATE
 
 ```
 $ git log --oneline
+f23decc fix-12: every task retries transient failures, with backoff and a cap
+cd10655 fix-11: an over-limit chunked body is 413, not 400
+288e5d4 fix-9: one exception, one traceback
+996d5c0 docs: the plugin seam docstring said to edit main.py
+a8f211e fix-6: CORS denies by default; the wildcard is opt-in
+8e55450 fix-7: refuse to start a deployed environment on the local secrets
+dfae256 docs: record the remediation and the READY verdict
 d1d00c0 part-2: one folder per service, and a core/services boundary in the app
 58db1ec fix-1b: load tasks lazily so the registry never depends on lifespan
 e215b1a fix-6: make `make install` tell the truth
@@ -796,7 +1085,12 @@ ab4e813 fix-5: a cache outage should cost latency, not uptime
 22319b3 (the audited baseline)
 ```
 
-**Verdict: READY.**
+**Verdict: READY - and, as of the 2026-08-25 hardening pass, prod-ready.**
+
+The distinction matters. The first verdict said the *structure* was sound: a
+feature plugs in with zero base edits. It did not say the base was safe to
+deploy, because `ENVIRONMENT=prod` would happily boot on a published password
+and answer every browser origin on earth. Both are now impossible.
 
 The base now holds the property it was built for: a new feature is a directory
 under `app/services/`, and everything else — correlation, logging, tracing,

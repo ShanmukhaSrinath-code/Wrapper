@@ -104,12 +104,16 @@ Drop a module (or a package) into [`app/services/`](app/services/):
 | Define | And you get |
 |---|---|
 | `router = APIRouter(...)` | mounted on the app — no edit to `main.py` |
-| `@celery_app.task` | registered with the worker — no list to update |
+| `@celery_app.task` | registered with the worker — no list to update, and it inherits the retry policy |
 | a SQLAlchemy model | in `Base.metadata`, seen by Alembic autogenerate |
 
 Then `make revision m="..."` and `make migrate`. **Adding a feature requires
 zero edits to `app/core/**` or `app/main.py`** — there are no registries to
 forget. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+The migration step is the one thing discovery does not do for you, and that is
+deliberate: discovery makes your model *visible* to Alembic, it does not touch
+your database. Nothing in this base writes DDL behind your back.
 
 Everything else — correlation, error shape, security headers, health probes,
 metrics, audit — applies to your new code automatically. Two conventions are
@@ -204,9 +208,53 @@ records `unresolved` and logs a warning rather than inventing `anonymous`.
 ## Configuration
 
 All configuration is environment-driven via `Settings`
-([`app/config.py`](app/config.py)); see [`.env.example`](.env.example) for every
-variable with its default. Nothing sensitive is hard-coded — `make scan` runs a
-Trivy secret scan over the tree to keep it that way.
+([`app/core/config.py`](app/core/config.py)); see [`.env.example`](.env.example)
+for every variable with its default. Nothing sensitive is hard-coded — `make
+scan` runs a Trivy secret scan over the tree to keep it that way.
+
+### What changes the moment `ENVIRONMENT` is not `local`
+
+The defaults in this repo exist so `make up` works from a clean clone. Two of
+them would be dangerous anywhere else, so the base refuses to let them travel:
+
+- **Dev credentials do not survive.** Set `ENVIRONMENT` to `dev`, `staging` or
+  `prod` and startup **fails** — naming every field still on its shipped
+  default — until each real secret is supplied. The check is derived from the
+  model, so a credential added later is covered the day it is added:
+
+  ```
+  ValidationError: ENVIRONMENT='prod' is still using the local development
+  defaults for: postgres_app_password, postgres_password, s3_access_key,
+  s3_secret_key. Set each one from your secret store (see SECRETS_PROVIDER)
+  before deploying.
+  ```
+
+- **CORS denies by default.** `CORS_ALLOW_ORIGINS` is empty unless you set it.
+  `*` is available, but it has to be typed — it is never what you get by
+  forgetting. (Server-to-server callers are unaffected; CORS is a browser
+  mechanism.)
+
+### Retries
+
+Every task inherits a retry policy from the base task class: transient failures
+(`ConnectionError`, `TimeoutError`, `OSError`, SQLAlchemy `OperationalError`,
+botocore errors) are retried with exponential backoff and jitter, capped at
+`TASK_MAX_RETRIES` (default 3). A `TypeError` in your task body is a bug, not a
+blip, and is **not** retried — it would fail identically three more times.
+
+`demo.flaky` demonstrates it end to end.
+
+---
+
+## Off by default, on purpose
+
+These are deliberate local defaults, not gaps:
+
+| Thing | State locally | Turn it on with |
+|---|---|---|
+| **Sentry** | disabled, logged as `sentry.disabled` | `SENTRY_DSN=...` |
+| **Tracing → Tempo** | spans are generated for correlation but not exported | `OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4318` and `--profile tracing` |
+| **Schema creation** | never automatic | `make revision m="..."` then `make migrate` |
 
 ---
 

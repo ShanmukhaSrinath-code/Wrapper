@@ -1433,3 +1433,51 @@ six and were deliberately left alone. Highest value first:
 3. One unhandled exception still produces three error log records.
 4. A chunked over-limit body returns 400 rather than 413 (memory is bounded).
 5. No Celery retry policy is demonstrated.
+
+---
+
+# HARDENING PASS -- 2026-08-25
+
+The five findings recorded above as "still open" are now closed. They were all
+configuration or observability, not structure -- which is why the base was
+structurally READY before it was safe to deploy.
+
+| Commit | Defect | What changed |
+|---|---|---|
+| `8e55450` | #7 | `Settings` refuses to construct when `ENVIRONMENT != local` and a credential still equals its shipped default. The guarded field set is derived from the model, so a secret added later is covered automatically. |
+| `a8f211e` | #6 | `CORS_ALLOW_ORIGINS` defaults to deny. `*` is an explicit opt-in, in `.env.example` too. |
+| `996d5c0` | docs | `app/services/__init__.py` no longer tells you to register routers in `app/main.py` -- untrue since router discovery, and it pointed developers at a protected module. Pinned by a grep test. |
+| `288e5d4` | #9 | One exception now writes one traceback. Uvicorn's duplicate is filtered by exception *object*, so an unlogged exception still prints its stack. |
+| `cd10655` | #11 | An over-limit chunked body returns 413 in the standard error schema instead of a 400 blaming the client's syntax. |
+| `f23decc` | #12 | Every task inherits a retry policy (transient errors only, exponential backoff, jitter, capped at 3) from the base task class. |
+
+## Notes worth keeping
+
+- **The prod guard is derived, not listed.** A field counts as a credential if
+  its name says so and its default is a non-empty string. Locators ending in
+  `_url` / `_endpoint` are excluded, so `azure_key_vault_url` is not mistaken
+  for a secret.
+- **Retries exclude bugs on purpose.** `TypeError` is not in `autoretry_for`:
+  retrying it burns the queue to reach the identical failure three more times.
+- **Jitter is not decoration.** Without it every task that failed during an
+  outage retries in lockstep the moment it ends, and knocks the dependency over
+  again.
+- **The 413 fix swallows only the exception it caused.** The disconnect is our
+  own signal; anything raised while the body was within the limit still
+  propagates.
+- **Trivy note:** a planted *AWS documentation example* key is not flagged --
+  that is the scanner being correct, not the gate being weak. The negative
+  control uses a realistic GitHub PAT, which fails the build as it should.
+
+## Verification
+
+- 184 tests, 88.91% coverage, two identical runs.
+- Prod-boot proof against the built image: refuses with dev defaults (exit 1),
+  boots with real secrets, `local` unchanged.
+- No-regression sweep clean: correlation smoke, readiness naming both deps,
+  Redis-down degradation, audit UPDATE/DELETE/TRUNCATE rejection, Trivy gate
+  (tree + image + negative control).
+- Docs POC re-run on the hardened base: zero `app/core/**` edits; removing it
+  leaves an empty diff.
+
+**Verdict: READY, and prod-ready.**
