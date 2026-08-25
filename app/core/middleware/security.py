@@ -146,6 +146,7 @@ class RequestSizeLimitMiddleware:
 
         received = 0
         too_large = False
+        response_started = False
 
         async def limited_receive() -> Message:
             nonlocal received, too_large
@@ -154,12 +155,35 @@ class RequestSizeLimitMiddleware:
                 received += len(message.get("body", b""))
                 if received > self.max_bytes:
                     # A chunked request can omit Content-Length entirely, so the
-                    # stream itself has to be capped as well.
+                    # stream itself has to be capped as well. Reporting a
+                    # disconnect is what stops the app reading more; the 413 is
+                    # sent below, once the app has unwound.
                     too_large = True
                     return {"type": "http.disconnect"}
             return message
 
-        await self.app(scope, limited_receive, send)
+        async def limited_send(message: Message) -> None:
+            nonlocal response_started
+            if too_large:
+                # Whatever the app made of the truncated body -- a 400 about
+                # malformed input, or a 500 -- describes the symptom, not the
+                # cause. Drop it and answer with the real reason.
+                return
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, limited_send)
+        except Exception:
+            # We faked the disconnect, so whatever the app raised on the way out
+            # (Starlette turns it into ClientDisconnect) is our doing, not a
+            # bug -- swallow it and answer with the 413 below. Anything raised
+            # while the body was still within the limit is a real failure and
+            # is re-raised untouched.
+            if not too_large:
+                raise
+
         if too_large:
             log.warning(
                 "request.body_too_large",
@@ -167,16 +191,20 @@ class RequestSizeLimitMiddleware:
                 limit_bytes=self.max_bytes,
                 http_path=scope.get("path"),
             )
+            if not response_started:
+                await self._reject(send, received, declared=False)
 
-    async def _reject(self, send: Send, declared: int) -> None:
+    async def _reject(self, send: Send, size: int, *, declared: bool = True) -> None:
+        """Send the standard 413, whether the size was declared or measured."""
         from app.core.errors import ErrorResponse
         from app.core.logging import current_request_id, current_trace_id
 
-        log.warning(
-            "request.body_too_large",
-            declared_bytes=declared,
-            limit_bytes=self.max_bytes,
-        )
+        if declared:
+            log.warning(
+                "request.body_too_large",
+                declared_bytes=size,
+                limit_bytes=self.max_bytes,
+            )
         body = ErrorResponse(
             error="payload_too_large",
             message=f"Request body exceeds the {self.max_bytes} byte limit.",
