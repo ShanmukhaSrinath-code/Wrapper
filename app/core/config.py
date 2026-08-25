@@ -14,13 +14,41 @@ import functools
 import os
 from typing import Literal
 
-from pydantic import Field, computed_field
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _split_csv(raw: str) -> list[str]:
     """Split a comma-separated setting into a clean list."""
     return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+#: A field is treated as a credential if its name says so. Deriving the set this
+#: way -- rather than listing fields -- means a secret added later is guarded the
+#: day it is added, with no list to remember.
+_SECRET_NAME_PARTS = ("password", "secret", "token", "_key")
+#: ...except locators, which merely *name* a secret store.
+_SECRET_NAME_SUFFIXES = ("_url", "_endpoint", "_provider", "_name")
+
+
+def _looks_like_a_secret(field_name: str) -> bool:
+    if field_name.endswith(_SECRET_NAME_SUFFIXES):
+        return False
+    return any(part in field_name for part in _SECRET_NAME_PARTS)
+
+
+def dev_default_secret_fields() -> list[str]:
+    """Fields the deployed-environment guard checks.
+
+    Every credential-looking field that ships with a **non-empty default** --
+    a default is only ever a local convenience, so carrying one into a deployed
+    environment means the real secret was never supplied.
+    """
+    return sorted(
+        name
+        for name, field in Settings.model_fields.items()
+        if _looks_like_a_secret(name) and isinstance(field.default, str) and field.default
+    )
 
 
 class Settings(BaseSettings):
@@ -110,6 +138,32 @@ class Settings(BaseSettings):
     # --- secrets -------------------------------------------------------------
     secrets_provider: Literal["env", "azure_key_vault"] = "env"
     azure_key_vault_url: str | None = Field(default=None)
+
+    # --- deployment safety ---------------------------------------------------
+    @model_validator(mode="after")
+    def _reject_dev_defaults_outside_local(self) -> Settings:
+        """Refuse to start a deployed environment on the local-compose secrets.
+
+        These defaults exist so `make up` works from a clean clone. Booting
+        `prod` on them is not a smaller problem than crashing -- it is a
+        published database password -- so this fails loudly at construction,
+        before anything binds a port.
+        """
+        if self.environment == "local":
+            return self
+
+        offenders = [
+            name
+            for name in dev_default_secret_fields()
+            if getattr(self, name) == Settings.model_fields[name].default
+        ]
+        if offenders:
+            raise ValueError(
+                f"ENVIRONMENT={self.environment!r} is still using the local development "
+                f"defaults for: {', '.join(offenders)}. Set each one from your secret "
+                f"store (see SECRETS_PROVIDER) before deploying."
+            )
+        return self
 
     # --- derived -------------------------------------------------------------
     @property
