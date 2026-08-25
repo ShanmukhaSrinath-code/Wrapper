@@ -80,5 +80,8 @@ scan: ## Trivy dependency + image scan
 smoke: ## Full-stack correlation smoke test
 	$(PY) python scripts/smoke.py
 
-clean: ## Remove caches
-	rm -rf .pytest_cache .ruff_cache .mypy_cache htmlcov .coverage
+clean: ## Remove caches and compiled bytecode
+	rm -rf .pytest_cache .ruff_cache .mypy_cache .import_linter_cache htmlcov .coverage
+	@# Bytecode too: a stale __pycache__ from a since-renamed module is a real
+	@# source of "why is that still importable?" confusion after a refactor.
+	find . -path ./.venv -prune -o -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
