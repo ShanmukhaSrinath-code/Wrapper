@@ -128,7 +128,11 @@ class Settings(BaseSettings):
     sentry_traces_sample_rate: float = 0.0
 
     # --- security ------------------------------------------------------------
-    cors_allow_origins: str = "*"
+    #: Deny by default. A browser origin that may call this API is a deployment
+    #: decision, so the wildcard is an explicit opt-in rather than what you get
+    #: by forgetting to set it. Server-to-server callers are unaffected: CORS is
+    #: a browser mechanism.
+    cors_allow_origins: str = ""
     cors_allow_credentials: bool = False
     cors_allow_methods: str = "*"
     cors_allow_headers: str = "*"
