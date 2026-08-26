@@ -123,10 +123,15 @@ Negative proof — break it on purpose:
 
 ```bash
 echo "import nonexistent_module" >> app/services/tickets/models.py
-docker compose -f deploy/docker-compose.yml restart app
-docker compose -f deploy/docker-compose.yml logs --tail=20 app   # PluginImportError
+# No source is mounted into the container -- the image is baked -- so run
+# discovery locally rather than restarting, which would just re-run old code.
+.venv/Scripts/python.exe -c   "from app.core.discovery import import_discovered_models; import_discovered_models()"
 git checkout app/services/tickets/models.py
 ```
+
+Expect `PluginImportError: models module 'app.services.tickets.models' failed to
+import`. To see the same thing kill a container, rebuild rather than restart:
+`docker compose -f deploy/docker-compose.yml up -d --build app`.
 
 > A broken plugin stops the process. It does **not** boot with a missing route.
 
@@ -316,7 +321,7 @@ curl -s localhost:8000/demo/boom | python -m json.tool  # 500
 
 ```bash
 curl -sI localhost:8000/health/live | grep -iE 'content-security|x-frame|x-content|referrer'
-head -c 3000000 /dev/urandom > /tmp/big.bin
+head -c 11000000 /dev/urandom > /tmp/big.bin   # limit is 10 MiB
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/tickets/$ID/attachment -F file=@/tmp/big.bin
 curl -si -X OPTIONS localhost:8000/tickets -H 'Origin: http://evil.example' \
   -H 'Access-Control-Request-Method: POST' | head -1
