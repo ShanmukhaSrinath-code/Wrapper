@@ -160,7 +160,7 @@
     },
     {
       "type": "logs",
-      "title": "Logs for $request_id (blank = all app logs)",
+      "title": "Logs for $request_id - API and worker (blank = all logs)",
       "datasource": { "type": "loki", "uid": "loki" },
       "gridPos": { "h": 12, "w": 24, "x": 0, "y": 23 },
       "options": {
@@ -172,7 +172,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{service=\"app\"} | json | request_id =~ `$request_id.*`",
+          "expr": "{service=~\"app|worker\"} | json | request_id =~ `$request_id.*`",
           "queryType": "range"
         }
       ]

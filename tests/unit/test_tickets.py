@@ -270,3 +270,18 @@ def test_the_feature_did_not_reach_into_core() -> None:
 
     for forbidden in ("import boto3", "import redis", "from redis", "import logging"):
         assert forbidden not in sources, f"feature reaches past the seam: {forbidden}"
+
+
+def test_the_verify_router_is_mounted_too() -> None:
+    """A second router in the same package is also auto-discovered.
+
+    Worth asserting explicitly: discovery walks *modules*, not packages, so one
+    feature package can expose more than one router without any registration.
+    """
+    from app.core.discovery import discover_routers
+
+    mounted = dict(discover_routers())
+
+    assert "app.services.tickets.verify" in mounted
+    paths = {route.path for route in mounted["app.services.tickets.verify"].routes}  # type: ignore[attr-defined]
+    assert paths == {"/verify/blocks", "/verify/ids"}

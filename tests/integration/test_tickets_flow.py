@@ -343,3 +343,58 @@ async def test_escalate_stale_leaves_fresh_tickets_alone(app_client: httpx.Async
 
     unchanged = await app_client.get(f"/tickets/{body['id']}")
     assert unchanged.json()["priority"] == "low"
+
+
+# --------------------------------------------------------------------------
+# the one-click block check
+# --------------------------------------------------------------------------
+
+
+async def test_verify_blocks_returns_every_id_separately(app_client: httpx.AsyncClient) -> None:
+    """`POST /verify/blocks` is the Swagger-driven demo, so it must not rot.
+
+    It exists because Swagger cannot send a custom `X-Request-ID` and the ids
+    otherwise only appear in response headers, which is easy to miss on a
+    projector. This asserts the contract that demo depends on: every block
+    reports, and every id comes back in the body.
+    """
+    response = await app_client.post("/verify/blocks")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    # Each id on its own field -- that is the whole point of the endpoint.
+    for field in ("request_id", "trace_id", "ticket_id", "audit_id", "task_id", "storage_key"):
+        assert body[field], f"{field} came back empty"
+
+    assert body["request_id"] == response.headers["X-Request-ID"]
+    assert body["trace_id"] == response.headers["X-Trace-ID"]
+    assert "X-Amz-Signature" in body["presigned_url"]
+
+    reported = {b["block"]: b["ok"] for b in body["blocks"]}
+    assert reported == {
+        "PostgreSQL": True,
+        "Redis (cache)": True,
+        "MinIO (object store)": True,
+        "Audit trail": True,
+        "Celery worker": True,
+        "Correlation + tracing": True,
+    }
+
+    # The copy-paste queries must carry this request's id, or the demo sends
+    # the presenter to an empty panel.
+    assert body["request_id"] in body["loki_query"]
+    assert body["request_id"] in body["grafana_dashboard"]
+
+
+async def test_verify_ids_has_no_side_effects(app_client: httpx.AsyncClient) -> None:
+    before = (await app_client.get("/tickets/stats")).json()["total"]
+
+    ids = (await app_client.get("/verify/ids")).json()
+    assert ids["request_id"]
+    assert ids["actor"] == "dev"
+
+    after = (await app_client.get("/tickets/stats")).json()["total"]
+    # Stats are cached for 30s, so this is a weak check by design; the point is
+    # that the endpoint creates nothing.
+    assert after == before
