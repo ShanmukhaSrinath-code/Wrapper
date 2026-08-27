@@ -116,6 +116,29 @@ def instrument_app(app: FastAPI, config: Settings) -> None:
     except Exception as exc:
         log.warning("otel.instrument.redis.failed", error=str(exc))
 
+    instrument_celery()
+
+
+def instrument_celery() -> None:
+    """Trace Celery on both sides of the queue.
+
+    In the API process this gives the *publish* a span and, more usefully,
+    injects the trace context into the message headers. In the worker it makes
+    task execution a child of the request that published it -- so a background
+    job appears in the same trace waterfall as the HTTP call that caused it,
+    rather than being invisible.
+
+    Called from :func:`instrument_app` for the API and from the worker's
+    ``worker_process_init`` handler. Safe to call twice: the instrumentor is
+    itself idempotent.
+    """
+    try:
+        from opentelemetry.instrumentation.celery import CeleryInstrumentor
+
+        CeleryInstrumentor().instrument()
+    except Exception as exc:
+        log.warning("otel.instrument.celery.failed", error=str(exc))
+
 
 def instrument_sqlalchemy(engine: object) -> None:
     """Instrument the async engine. Called once the engine exists."""

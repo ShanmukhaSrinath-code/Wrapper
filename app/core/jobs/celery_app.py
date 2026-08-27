@@ -26,6 +26,7 @@ from celery.signals import (
     task_failure,
     task_postrun,
     task_prerun,
+    worker_process_init,
 )
 from celery.signals import (
     import_modules as celery_on_after_configure,
@@ -235,3 +236,26 @@ def _load_tasks_in_worker(**_: Any) -> None:
     """
     configure_logging()
     load_tasks()
+
+
+@worker_process_init.connect
+def _configure_worker_tracing(**_: Any) -> None:
+    """Set up tracing inside each worker *child* process.
+
+    Deliberately not done at import time in the parent. Celery's default pool
+    forks, and a `BatchSpanProcessor` runs a background export thread that does
+    **not** survive `fork` -- a provider built in the parent would look healthy
+    in every child while silently exporting nothing. `worker_process_init` fires
+    once per child, after the fork, which is the only correct place for it.
+
+    With this in place `CeleryInstrumentor` makes task execution a child span of
+    the request that published the message, so background work shows up in the
+    same trace as the HTTP call that caused it.
+    """
+    # Imported here rather than at module scope: the API process configures
+    # tracing through its own lifespan, and the worker should not pay for
+    # importing the observability stack until it is actually starting up.
+    from app.core.observability import configure_tracing, instrument_celery
+
+    configure_tracing(settings)
+    instrument_celery()
