@@ -17,12 +17,15 @@ from typing import Any
 import boto3
 from botocore.client import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.core.storage.base import ObjectNotFoundError, Storage, StorageError, StoredObject
 
 log = get_logger(__name__)
+_tracer = trace.get_tracer(__name__)
 
 #: Error codes MinIO/S3 use for "it isn't there".
 _NOT_FOUND = {"404", "NoSuchKey", "NoSuchBucket", "NotFound"}
@@ -61,15 +64,39 @@ class MinioStorage(Storage):
 
     # -- helpers ------------------------------------------------------------
     async def _call(self, fn: str, **kwargs: Any) -> Any:
-        try:
-            return await asyncio.to_thread(partial(getattr(self._client, fn), **kwargs))
-        except ClientError as exc:
-            code = str(exc.response.get("Error", {}).get("Code", ""))
-            if code in _NOT_FOUND:
-                raise ObjectNotFoundError(kwargs.get("Key", self._bucket)) from exc
-            raise StorageError(f"S3 {fn} failed: {code}") from exc
-        except BotoCoreError as exc:
-            raise StorageError(f"S3 {fn} failed: {type(exc).__name__}") from exc
+        """Run one boto3 call in a thread, wrapped in a span.
+
+        Every S3 operation funnels through here, so one span here traces the
+        whole adapter. The span is written by hand rather than by
+        ``BotocoreInstrumentor`` deliberately: the instrumentation package is
+        not in ``uv.lock``, and adding a dependency to gain four lines of code
+        is a poor trade. The attribute names follow the OpenTelemetry semantic
+        conventions, so a collector or backend that understands S3 spans still
+        recognises these.
+        """
+        with _tracer.start_as_current_span(f"S3 {fn}", kind=SpanKind.CLIENT) as span:
+            span.set_attribute("rpc.system", "aws-api")
+            span.set_attribute("rpc.service", "S3")
+            span.set_attribute("rpc.method", fn)
+            span.set_attribute("aws.s3.bucket", str(kwargs.get("Bucket", self._bucket)))
+            if "Key" in kwargs:
+                span.set_attribute("aws.s3.key", str(kwargs["Key"]))
+
+            try:
+                return await asyncio.to_thread(partial(getattr(self._client, fn), **kwargs))
+            except ClientError as exc:
+                code = str(exc.response.get("Error", {}).get("Code", ""))
+                # A missing object is an expected outcome, not a failed span --
+                # marking it an error would make every `exists()` check look
+                # like an incident in the trace view.
+                if code in _NOT_FOUND:
+                    span.set_attribute("aws.s3.found", False)
+                    raise ObjectNotFoundError(kwargs.get("Key", self._bucket)) from exc
+                span.set_status(Status(StatusCode.ERROR, f"S3 {code}"))
+                raise StorageError(f"S3 {fn} failed: {code}") from exc
+            except BotoCoreError as exc:
+                span.set_status(Status(StatusCode.ERROR, type(exc).__name__))
+                raise StorageError(f"S3 {fn} failed: {type(exc).__name__}") from exc
 
     # -- Storage ------------------------------------------------------------
     async def ensure_ready(self) -> None:
