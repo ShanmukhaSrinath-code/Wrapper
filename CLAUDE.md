@@ -82,7 +82,8 @@ Two conventions that matter:
 What you must never hand-roll, because it is already applied to your code:
 correlation ids, log format, trace spans, `/metrics` counters, the error JSON
 shape, security headers, DB session lifecycle, cache degradation, audit
-attribution, health probes, task retries.
+attribution, health probes, task retries, rate limiting, outbound timeouts and
+circuit breaking.
 
 ## Import these, not the implementations
 
@@ -92,20 +93,25 @@ from app.core.db import Base  # model base
 from app.core import cache  # get_json / set_json / get_or_set
 from app.core.storage import get_storage  # the Storage interface
 from app.core.jobs import enqueue  # verifies the task is registered
+from app.core.http import request  # outbound calls, with the ids attached
 from app.core.audit import write_audit  # actor + ids come from context
 from app.core.errors import NotFoundError  # and friends
 from app.core.logging import get_logger  # log = get_logger(__name__)
 from app.core.security.current_user import CurrentUser
 ```
 
-Never import `boto3`, `redis`, or a driver directly from a feature. Depend on
-the interface so the backend stays swappable and fakeable.
+Never import `boto3`, `redis`, `httpx`, or a driver directly from a feature.
+Depend on the interface so the backend stays swappable and fakeable. `httpx` is
+the sharpest case: a hand-built client works perfectly and silently drops the
+correlation ids, so the trail stops at the first network hop.
 
 ---
 
 ## Commands
 
 ```bash
+./run.sh       # ONE command: start 10 services, migrate, print every URL
+               #   --stop keeps data, --fresh wipes volumes, --open opens tabs
 make install   # uv sync + verify the venv actually works
 make up        # start the whole stack (10 services)
 make migrate   # apply migrations

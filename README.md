@@ -16,7 +16,7 @@ Independent acceptance audit: [TEST_REPORT.md](TEST_REPORT.md).
 ```bash
 cp .env.example .env
 make install     # install Python 3.12 + all dependencies (uv)
-make up          # start the full stack
+./run.sh        # start the full stack, migrate, print every URL
 make migrate     # apply database migrations
 make smoke       # prove every component is correlated
 ```

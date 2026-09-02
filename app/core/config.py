@@ -145,6 +145,37 @@ class Settings(BaseSettings):
     max_request_body_bytes: int = 10 * 1024 * 1024  # 10 MiB
     hsts_max_age_seconds: int = 31_536_000
 
+    # --- rate limiting -------------------------------------------------------
+    #: On by default. A limit that ships off is a limit nobody turns on until
+    #: after the first incident.
+    rate_limit_enabled: bool = True
+    #: Requests allowed per client per window. Generous on purpose: this is an
+    #: abuse and runaway-retry brake, not a quota product.
+    rate_limit_requests: int = 120
+    rate_limit_window_seconds: int = 60
+    #: Paths never counted. Probes and scrapes fire constantly and throttling a
+    #: liveness probe would make the orchestrator restart a healthy process.
+    rate_limit_exempt_paths: str = "/health/live,/health/ready,/metrics"
+    #: Whether `X-Forwarded-For` may identify the client. Default **off**: when
+    #: nothing strips the header, any caller can forge it and get a fresh budget
+    #: per request. Turn it on only behind a proxy you control.
+    rate_limit_trust_forwarded_for: bool = False
+
+    # --- outbound http -------------------------------------------------------
+    #: Timeouts are not optional. An unbounded outbound call turns a slow
+    #: dependency into exhausted workers here, which is how one team's incident
+    #: becomes everyone's.
+    http_connect_timeout_seconds: float = 5.0
+    http_read_timeout_seconds: float = 15.0
+    http_max_connections: int = 100
+    #: Retries beyond the first attempt, for transient failures only.
+    http_max_retries: int = 2
+    http_retry_backoff_seconds: float = 0.2
+    #: Consecutive failures to one host before the breaker opens.
+    http_breaker_enabled: bool = True
+    http_breaker_failure_threshold: int = 5
+    http_breaker_reset_seconds: float = 30.0
+
     # --- secrets -------------------------------------------------------------
     secrets_provider: Literal["env", "azure_key_vault"] = "env"
     azure_key_vault_url: str | None = Field(default=None)
@@ -249,6 +280,10 @@ class Settings(BaseSettings):
     @property
     def cors_headers_list(self) -> list[str]:
         return [h.strip() for h in self.cors_allow_headers.split(",") if h.strip()]
+
+    @property
+    def rate_limit_exempt_paths_set(self) -> frozenset[str]:
+        return frozenset(_split_csv(self.rate_limit_exempt_paths))
 
 
 # =============================================================================

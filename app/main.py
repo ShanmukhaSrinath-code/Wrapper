@@ -19,9 +19,11 @@ from app.core.config import Settings, settings
 from app.core.db import session as db_session
 from app.core.discovery import discover_routers, import_discovered_models
 from app.core.errors import configure_sentry, register_exception_handlers
+from app.core.http import close_client as close_http_client
 from app.core.jobs.celery_app import load_tasks
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware.correlation import CorrelationMiddleware
+from app.core.middleware.ratelimit import RateLimitMiddleware
 from app.core.middleware.security import (
     RequestSizeLimitMiddleware,
     SecurityHeadersMiddleware,
@@ -68,6 +70,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("app.shutdown")
     await db_session.dispose_engine()
     await cache.close_client()
+    await close_http_client()
 
 
 def create_app(config: Settings | None = None) -> FastAPI:
@@ -101,9 +104,16 @@ def create_app(config: Settings | None = None) -> FastAPI:
     #   CorrelationMiddleware  (ids exist before anything else logs)
     #     -> CORS              (preflight answered without touching the app)
     #       -> SecurityHeaders (stamps every response, errors included)
-    #         -> SizeLimit     (reject huge bodies before a route sees them)
-    #           -> routes
+    #         -> RateLimit     (reject an over-budget caller before it costs work)
+    #           -> SizeLimit   (reject huge bodies before a route sees them)
+    #             -> routes
+    #
+    # RateLimit sits *outside* SizeLimit deliberately: a caller that has already
+    # spent its budget should be turned away before this process reads its body.
+    # It sits *inside* SecurityHeaders so a 429 ships with the same headers as
+    # every other response.
     app.add_middleware(RequestSizeLimitMiddleware, config=config)
+    app.add_middleware(RateLimitMiddleware, config=config)
     app.add_middleware(SecurityHeadersMiddleware, config=config)
     app.add_middleware(CORSMiddleware, **build_cors_kwargs(config))
     app.add_middleware(CorrelationMiddleware)

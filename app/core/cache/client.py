@@ -112,7 +112,7 @@ async def delete(*keys: str) -> int:
         log.warning("cache.unavailable", operation="delete", keys=list(keys), error=str(exc))
         return 0
 
-
+#cache-aside pattern: get-or-set key, producer, ttl
 async def get_or_set[T](
     key: str,
     producer: Callable[[], Awaitable[T]],

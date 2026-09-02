@@ -1,0 +1,984 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Common Application Base — Interactive Architecture</title>
+<style>
+  :root{
+    --navy:#0f172a; --navy2:#1e293b; --slate:#475569; --body:#334155;
+    --muted:#94a3b8; --line:#e2e8f0; --pale:#f8fafc; --light:#f1f5f9;
+    --accent:#0d9488; --blue:#2563eb; --amber:#d97706; --green:#159e5b;
+    --red:#dc2626; --purple:#7c3aed;
+    --panel-w: 480px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    font:15px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif;
+    color:var(--body); background:#fff; -webkit-font-smoothing:antialiased;
+  }
+  code,.mono{font-family:Consolas,"SF Mono",Menlo,monospace}
+
+  /* ---------- layout ---------- */
+  .wrap{display:flex; min-height:100vh}
+  .stage{flex:1; min-width:0; padding:28px 32px 60px; transition:margin-right .25s ease}
+  body.panel-open .stage{margin-right:var(--panel-w)}
+
+  header h1{margin:0 0 4px; font-size:26px; color:var(--navy); letter-spacing:-.01em}
+  header p{margin:0 0 4px; color:var(--slate); font-size:14.5px}
+  .hint{
+    display:inline-flex; align-items:center; gap:8px; margin-top:12px;
+    background:var(--light); border:1px solid var(--line); border-radius:999px;
+    padding:6px 14px; font-size:13px; color:var(--slate);
+  }
+  .hint b{color:var(--navy)}
+
+  /* ---------- diagram ---------- */
+  .band{margin-top:26px}
+  .band-label{
+    font-size:11px; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--muted); font-weight:700; margin-bottom:9px;
+  }
+  .row{display:grid; gap:14px; margin-bottom:14px}
+  .r4{grid-template-columns:repeat(4,1fr)}
+  .r3{grid-template-columns:repeat(3,1fr)}
+  .core-row{grid-template-columns:1fr 1.55fr 1fr; align-items:stretch; gap:18px}
+  .stack{display:flex; flex-direction:column; gap:14px}
+
+  .blk{
+    position:relative; text-align:left; cursor:pointer; width:100%;
+    background:#fff; border:1.5px solid var(--line); border-left:4px solid var(--c,var(--slate));
+    border-radius:10px; padding:13px 15px; font:inherit; color:inherit;
+    transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+  }
+  .blk:hover,.blk:focus-visible{
+    transform:translateY(-2px); box-shadow:0 6px 18px rgba(15,23,42,.10);
+    border-color:var(--c,var(--slate)); outline:none;
+  }
+  .blk.dim{opacity:.32; filter:saturate(.4)}
+  .blk.linked{border-color:var(--c,var(--slate)); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent)}
+  .blk.active{border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 30%,transparent)}
+  .blk .t{font-weight:700; color:var(--navy); font-size:14.5px; display:flex; align-items:center; gap:7px}
+  .blk .s{font-size:12.3px; color:var(--slate); margin-top:3px}
+  .ico{width:17px; height:17px; flex:none; color:var(--c)}
+
+  .core{
+    --c:var(--blue);
+    background:linear-gradient(160deg,#eff6ff,#fff);
+    border:2px solid #bfdbfe; border-left:6px solid var(--blue);
+    display:flex; flex-direction:column; justify-content:center; padding:20px 24px;
+  }
+  .core .t{font-size:20px}
+  .core .s{font-size:13px}
+  .core ul{margin:11px 0 0; padding-left:19px; columns:2; font-size:13px; color:var(--body)}
+  .core li{margin:2px 0; break-inside:avoid}
+  .core .cta{
+    margin-top:13px; font-size:12.5px; font-weight:700; color:var(--blue);
+  }
+
+  .wide{--c:var(--slate)}
+  .infra{
+    border:1.5px dashed var(--line); border-radius:10px; padding:13px 16px;
+    background:var(--pale); margin-top:6px;
+  }
+  .infra .chips{display:flex; flex-wrap:wrap; gap:8px; margin-top:9px}
+  .chip{
+    background:#fff; border:1px solid var(--line); border-radius:7px;
+    padding:5px 11px; font-size:12.5px; cursor:pointer; color:var(--body);
+    transition:border-color .12s, color .12s;
+  }
+  .chip:hover{border-color:var(--blue); color:var(--navy)}
+
+  /* ---------- side panel ---------- */
+  .panel{
+    position:fixed; top:0; right:0; height:100vh; width:var(--panel-w);
+    background:#fff; border-left:1px solid var(--line);
+    box-shadow:-12px 0 32px rgba(15,23,42,.10);
+    transform:translateX(100%); transition:transform .25s ease;
+    display:flex; flex-direction:column; z-index:40;
+  }
+  body.panel-open .panel{transform:none}
+  .p-head{padding:20px 24px 15px; border-bottom:1px solid var(--line); background:var(--pale)}
+  .p-head .kind{
+    font-size:10.5px; letter-spacing:.09em; text-transform:uppercase;
+    font-weight:800; color:var(--pc,var(--slate));
+  }
+  .p-head h2{margin:5px 0 5px; font-size:21px; color:var(--navy); letter-spacing:-.01em}
+  .p-head .sub{font-size:13px; color:var(--slate)}
+  .close{
+    position:absolute; top:15px; right:16px; width:30px; height:30px;
+    border:1px solid var(--line); background:#fff; border-radius:7px;
+    cursor:pointer; color:var(--slate); font-size:17px; line-height:1;
+  }
+  .close:hover{color:var(--navy); border-color:var(--slate)}
+  .p-body{padding:6px 24px 40px; overflow-y:auto; flex:1}
+
+  .sec{margin-top:20px}
+  .sec h3{
+    margin:0 0 7px; font-size:11px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); font-weight:800;
+  }
+  .sec p{margin:0 0 8px}
+  .sec ul{margin:0; padding-left:18px}
+  .sec li{margin:4px 0}
+
+  .io{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:6px}
+  .io > div{border:1px solid var(--line); border-radius:9px; padding:11px 13px; background:var(--pale)}
+  .io h4{margin:0 0 6px; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+  .io ul{padding-left:16px; font-size:13px}
+  .io.in h4{color:var(--green)}
+
+  .files{background:var(--light); border:1px solid var(--line); border-radius:9px; padding:11px 13px}
+  .files div{font-family:Consolas,monospace; font-size:12.4px; color:var(--navy); margin:3px 0}
+
+  .links{display:flex; flex-wrap:wrap; gap:7px}
+  .links button{
+    border:1px solid var(--line); background:#fff; border-radius:999px;
+    padding:5px 12px; font:inherit; font-size:12.5px; cursor:pointer; color:var(--body);
+  }
+  .links button:hover{border-color:var(--blue); color:var(--navy)}
+
+  .note{
+    border-left:3px solid var(--amber); background:#fffbeb;
+    padding:10px 13px; border-radius:0 8px 8px 0; font-size:13.3px; color:#78350f;
+  }
+  .note.ok{border-color:var(--green); background:#f0fdf4; color:#14532d}
+
+  .svc{border:1px solid var(--line); border-radius:9px; padding:11px 13px; margin-bottom:9px}
+  .svc .n{font-weight:700; color:var(--navy); font-family:Consolas,monospace; font-size:13.3px}
+  .svc .d{font-size:13px; color:var(--body); margin-top:4px}
+
+  .empty{padding:44px 24px; color:var(--muted); text-align:center; font-size:14px}
+  @media (max-width:1150px){
+    :root{--panel-w:100%}
+    body.panel-open .stage{margin-right:0}
+    .r4{grid-template-columns:repeat(2,1fr)}
+    .core-row{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <main class="stage">
+    <header>
+      <h1>Common Application Base — Architecture</h1>
+      <p>Every block below is a real part of this repository. Click one to see what it is,
+         when it is used, how it is wired, and what it consumes and produces.</p>
+      <div class="hint">Click any block &nbsp;·&nbsp; hover to highlight what it talks to &nbsp;·&nbsp;
+        <b>Core Logic</b> lists every service inside it</div>
+    </header>
+
+    <div class="band">
+      <div class="band-label">Entry &amp; request path</div>
+      <div class="row r4" id="row-entry"></div>
+    </div>
+
+    <div class="band">
+      <div class="band-label">Core</div>
+      <div class="row core-row">
+        <div class="stack" id="col-left"></div>
+        <button class="blk core" data-id="core">
+          <div class="t">Core Logic <span style="font-weight:400;color:var(--slate);font-size:13px">— your features</span></div>
+          <div class="s">app/services/** &nbsp;·&nbsp; auto-discovered, zero base edits</div>
+          <ul>
+            <li>Business rules</li><li>Domain models</li>
+            <li>Use cases</li><li>Workflows</li>
+            <li>Validations</li><li>Background tasks</li>
+          </ul>
+          <div class="cta">Click to list every service inside &rarr;</div>
+        </button>
+        <div class="stack" id="col-right"></div>
+      </div>
+    </div>
+
+    <div class="band">
+      <div class="band-label">Observability — how you see what happened</div>
+      <div class="row r4" id="row-obs"></div>
+    </div>
+
+    <div class="band">
+      <div class="infra">
+        <div class="band-label" style="margin:0">Infrastructure &amp; gates (deployed / run separately)</div>
+        <div class="chips" id="row-infra"></div>
+      </div>
+    </div>
+  </main>
+
+  <aside class="panel" id="panel" aria-live="polite">
+    <div class="p-head">
+      <button class="close" id="close" title="Close (Esc)">&times;</button>
+      <div class="kind" id="p-kind"></div>
+      <h2 id="p-title"></h2>
+      <div class="sub" id="p-sub"></div>
+    </div>
+    <div class="p-body" id="p-body"><div class="empty">Select a block.</div></div>
+  </aside>
+</div>
+
+<script>
+/* =====================================================================
+   The content model. Every entry describes a real component of this repo.
+   ===================================================================== */
+const C = {accent:'var(--accent)', blue:'var(--blue)', amber:'var(--amber)',
+           green:'var(--green)', red:'var(--red)', purple:'var(--purple)',
+           slate:'var(--slate)', navy:'var(--navy2)'};
+
+const BLOCKS = {
+
+/* ------------------------------------------------ entry / request path -- */
+api: {
+  row:'entry', color:C.green, kind:'Entry point', title:'API / Router layer',
+  sub:'FastAPI + auto-discovered routers',
+  icon:'globe',
+  what:`The HTTP surface. One <code>FastAPI</code> application object is built by the factory
+        <code>create_app()</code>, and every endpoint reaches it as an <code>APIRouter</code>.
+        Two routers are mounted by hand — docs and health — because they must exist even if
+        every feature fails to load. All the rest are <b>found, not listed</b>.`,
+  when:`Whenever a request enters the process, and whenever you add an endpoint. Adding one
+        needs no edit here: define <code>router = APIRouter(prefix="/things")</code> at module
+        level under <code>app/services/</code> and it is mounted on the next start.`,
+  how:`<code>discover_routers()</code> walks the packages named by <code>PLUGIN_PACKAGES</code>
+       (default <code>app.services</code>), imports each module and does
+       <code>getattr(module, "router")</code>. Anything that is an <code>APIRouter</code> is
+       included, sorted by module name so route order is identical in every process.`,
+  inputs:['An HTTP request', 'PLUGIN_PACKAGES — which packages to scan'],
+  outputs:['A mounted route table', 'The OpenAPI schema at /openapi.json',
+           'A <code>router.mounted</code> log line per feature'],
+  links:['middleware','core','docs'],
+  files:['app/main.py — create_app(), include_router',
+         'app/core/discovery.py — discover_routers()',
+         'app/core/api/health.py — /health/live, /health/ready',
+         'app/core/api/docs.py — Swagger under a strict CSP'],
+  note:`A feature module is <b>never imported by name</b> anywhere in the base. That is what
+        makes "add a feature, edit nothing" true rather than aspirational.`
+},
+
+middleware: {
+  row:'entry', color:C.blue, kind:'Request path', title:'Middleware chain',
+  sub:'correlation · CORS · security headers · rate limit · size limit',
+  icon:'layers',
+  what:`Five layers every request passes through before a route sees it. They run in the order
+        below, and the order is deliberate rather than incidental.`,
+  when:`On every single request, including ones that will fail. This is where a request stops
+        being anonymous and starts being traceable.`,
+  how:`<b>1. Correlation</b> — accepts a valid inbound <code>X-Request-ID</code> or mints a
+       UUID4, opens an OpenTelemetry span, and binds <code>request_id</code>,
+       <code>trace_id</code> and <code>span_id</code> into structlog contextvars so
+       <i>every</i> later log line carries them.<br>
+       <b>2. CORS</b> — answers preflight without waking the app. Denies by default.<br>
+       <b>3. Security headers</b> — stamped on every response, errors included.<br>
+       <b>4. Rate limit</b> — rejects an over-budget caller before the body is read.<br>
+       <b>5. Size limit</b> — rejects an oversized body before a route allocates for it.`,
+  inputs:['The raw ASGI scope', 'An optional inbound X-Request-ID'],
+  outputs:['request_id / trace_id bound in context',
+           'X-Request-ID and X-Trace-ID echoed on the response',
+           'X-RateLimit-* headers',
+           'One <code>request.completed</code> log line with status and duration'],
+  links:['api','ratelimit','observability','core'],
+  files:['app/core/middleware/correlation.py',
+         'app/core/middleware/security.py',
+         'app/core/middleware/ratelimit.py',
+         'app/main.py — the registration order and why'],
+  note:`Starlette runs middleware in <b>reverse</b> registration order, so the last one added is
+        the outermost. The comment block in <code>create_app()</code> spells the resulting
+        request path out top-to-bottom.`
+},
+
+ratelimit: {
+  row:'entry', color:C.amber, kind:'Protection', title:'Rate limiting',
+  sub:'A shared counter in Redis',
+  icon:'gauge',
+  what:`A per-client request budget — 120 requests per 60 seconds by default — counted in
+        <b>Redis, not in the process</b>. An in-process counter multiplies by replica count:
+        three pods each allowing 120/min is a 360 limit nobody configured.`,
+  when:`Always on. It is the brake on abuse, on a runaway client retry loop, and on one
+        misbehaving caller starving everyone else.`,
+  how:`<code>INCR</code> plus <code>PEXPIRE</code> in a single Lua script, so the counter and
+       its TTL can never be set separately. As two commands, a process dying between them
+       leaves a key with no expiry — and that client is locked out permanently by a bug that
+       only appears under a crash.`,
+  inputs:['The client address (X-Forwarded-For only when explicitly trusted)',
+          'RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS'],
+  outputs:['X-RateLimit-Limit / -Remaining / -Reset on <b>every</b> response',
+           'A 429 with <code>Retry-After</code> and the standard error body',
+           '<code>app_rate_limit_rejected_total</code> for Prometheus',
+           'A correlated <code>request.rate_limited</code> log line'],
+  links:['middleware','cache','observability','errors'],
+  files:['app/core/middleware/ratelimit.py','app/core/config.py — the tunables'],
+  note:`<b>It fails open.</b> If Redis is unreachable the request is allowed and the outage is
+        logged. A limiter that takes the service down when its own store blinks is a worse
+        incident than the one it was preventing.`,
+  verified:`Measured live: 130 requests against a 120/minute budget produced exactly
+            <b>120 × 200 and 10 × 429</b>, with <code>Retry-After: 31</code>.`
+},
+
+errors: {
+  row:'entry', color:C.red, kind:'Contract', title:'Error handling',
+  sub:'One response shape for every failure',
+  icon:'alert',
+  what:`Every failure leaving this service looks the same to a caller:
+        <code>{"error","message","request_id","trace_id","detail"}</code>. Internal detail —
+        stack traces, driver messages — never crosses the boundary.`,
+  when:`Raise an <code>AppError</code> subclass for anything the domain expects to reject:
+        <code>NotFoundError</code>, <code>ConflictError</code>, <code>ValidationError</code>,
+        <code>PayloadTooLargeError</code>, <code>RateLimitedError</code>,
+        <code>UpstreamError</code>. Anything else that escapes is treated as a bug.`,
+  how:`Handlers are registered most-specific-first. Expected failures are logged as
+       <b>warnings and are not sent to Sentry</b> — a 404 is not a bug, and paging on it
+       trains people to ignore alerts. Unexpected ones are logged once, with a traceback,
+       and captured.`,
+  inputs:['An exception raised anywhere in a route or dependency'],
+  outputs:['A JSON error body carrying the correlation ids',
+           'The right HTTP status', 'A Sentry event — for genuine bugs only'],
+  links:['middleware','sentry','core'],
+  files:['app/core/errors.py'],
+  note:`One bug used to arrive as <b>three</b> log entries with three stack traces. There is now
+        a test that fails if a single exception produces more than one error record.`
+},
+
+/* ------------------------------------------------------------- storage -- */
+db: {
+  row:'left', color:C.amber, kind:'Data', title:'Database (PostgreSQL)',
+  sub:'SQLAlchemy 2.x async + Alembic',
+  icon:'db',
+  what:`Primary persistence. Async engine, a request-scoped session, and migrations that are
+        reviewed files rather than runtime DDL.`,
+  when:`Any feature that stores state. Take <code>session: DbSession</code> as a route
+        dependency and use it — do not build a session yourself.`,
+  how:`<code>DbSession</code> is a FastAPI dependency that <b>commits on success and rolls back
+       on exception</b>, so a route never manages the transaction. Inside a route use
+       <code>flush()</code>, not <code>commit()</code>. Models inherit from
+       <code>Base</code> and are auto-discovered into <code>Base.metadata</code>.`,
+  inputs:['SQL from your feature code', 'DATABASE_URL'],
+  outputs:['Rows', 'A readiness signal', 'Traced spans via SQLAlchemy instrumentation'],
+  links:['core','migrations','audit','observability'],
+  files:['app/core/db/session.py — DbSession','app/core/db/base.py — Base, naming convention',
+         'migrations/env.py — imports every discovered model first'],
+  note:`Discovery makes a model <i>visible</i> to Alembic — it does <b>not</b> create the table.
+        Run <code>make revision</code> then <code>make migrate</code>. And autogenerate
+        <b>refuses to emit a DROP</b> unless <code>ALLOW_DESTRUCTIVE=1</code>, because a model
+        that failed to import looks identical to a deleted table.`
+},
+
+cache: {
+  row:'left', color:C.red, kind:'Data', title:'Cache (Redis)',
+  sub:'Cache-aside, and the rate-limit counter',
+  icon:'layers',
+  what:`A shared Redis used for two different jobs: caching expensive reads, and holding the
+        rate-limit counter.`,
+  when:`Reads that are expensive and tolerate being briefly stale. Write through
+        <code>cache.get_or_set(key, producer, ttl_seconds=...)</code>.`,
+  how:`<b>Invalidate on write, never update.</b> A write that recomputes the cache has to get
+       the serialisation exactly right in two places; deleting is idempotent and can only ever
+       cost one extra database read.`,
+  inputs:['A key and a producer function', 'REDIS_URL'],
+  outputs:['A cached JSON value, or a miss', 'A readiness signal'],
+  links:['core','ratelimit','queue','observability'],
+  files:['app/core/cache/client.py','app/core/cache/__init__.py'],
+  note:`<b>A cache outage is reported as a miss.</b> Losing Redis makes responses slower, never
+        unavailable — the caller simply recomputes, which is what it would do for a genuine
+        miss. Readiness still reports Redis down, so traffic drains on its own.`
+},
+
+storage: {
+  row:'left', color:C.amber, kind:'Data', title:'File storage (MinIO / S3)',
+  sub:'One interface, two backends',
+  icon:'folder',
+  what:`Object storage behind a <code>Storage</code> interface. The same adapter runs against
+        MinIO locally and real S3 in production — only the endpoint and credentials differ.`,
+  when:`Anything that is bytes rather than rows: uploads, images, documents, exports.
+        <b>The database holds the key; the object store holds the bytes.</b>`,
+  how:`<code>get_storage()</code> returns the interface. boto3 is synchronous, so every call
+       runs in a worker thread via <code>asyncio.to_thread</code> and never blocks the event
+       loop. Presigned URLs are signed for the address the <i>browser</i> will use, which
+       inside compose is not the address the service talks to.`,
+  inputs:['Bytes and a key', 'S3_* settings'],
+  outputs:['A stored object and its ETag', 'Presigned download URLs',
+           'An <code>S3 &lt;operation&gt;</code> span per call'],
+  links:['core','db','observability'],
+  files:['app/core/storage/base.py — the interface',
+         'app/core/storage/minio.py — the S3 adapter'],
+  note:`Depending on the interface rather than on boto3 is what lets the whole contract be
+        tested with an in-memory fake — no MinIO, no network, no credentials.`
+},
+
+/* ------------------------------------------------------------ outbound -- */
+external: {
+  row:'right', color:C.accent, kind:'Outbound', title:'External APIs',
+  sub:'The correlated HTTP client',
+  icon:'cloud',
+  what:`Calls out to other services and third parties — with the correlation ids attached, and
+        with failure handled rather than propagated.`,
+  when:`Any outbound HTTP call. Import <code>from app.core.http import request</code>.
+        <b>Never build an <code>httpx.AsyncClient</code> by hand.</b>`,
+  how:`<code>X-Request-ID</code> and the W3C <code>traceparent</code> are injected by an
+       <b>httpx event hook</b> rather than a helper function, so no call path can forget them —
+       including <code>stream()</code> and hand-built requests. Timeouts are always applied,
+       transient failures retry with jitter, and a per-host circuit breaker turns a dead
+       upstream into an instant 503 instead of a queue of workers waiting out a timeout.`,
+  inputs:['A method and URL from your feature', 'The current request_id and trace context'],
+  outputs:['An httpx.Response',
+           'UpstreamError (502) / UpstreamTimeoutError (504) / UpstreamUnavailableError (503)',
+           'An <code>HTTP &lt;METHOD&gt;</code> client span'],
+  links:['core','breaker','observability','errors'],
+  files:['app/core/http/client.py','app/core/http/breaker.py'],
+  note:`A hand-built client works perfectly <b>and silently drops the ids</b>, so the trail ends
+        at the first network hop. That is exactly the failure this package exists to prevent.`,
+  verified:`Measured live: an outbound call carrying <code>OUTBOUND-PROOF-001</code> was
+            <b>adopted</b> by the receiving service, and caller and receiver reported the
+            <b>same trace_id</b> — one trace across two services.`
+},
+
+breaker: {
+  row:'right', color:C.purple, kind:'Resilience', title:'Circuit breaker',
+  sub:'Per-host, in-process',
+  icon:'shield',
+  what:`Tracks consecutive failures per upstream host. After the threshold the circuit
+        <b>opens</b> and calls fail immediately without a socket; after the reset window one
+        request is admitted as a probe (<b>half-open</b>); success closes it, failure
+        re-opens it.`,
+  when:`Automatically, on every call made through the outbound client. You do not invoke it.`,
+  how:`The problem it solves is not the failing dependency — it is what this service does about
+       it. Without a breaker a dead upstream is discovered one request at a time: every caller
+       waits the full timeout, every worker is occupied waiting, and the queue grows until this
+       service is down too. <b>The dependency's incident becomes ours.</b>`,
+  inputs:['Success and failure outcomes from the outbound client'],
+  outputs:['An allow/deny decision per host',
+           'A Retry-After value', '<code>circuit.opened</code> / <code>.half_open</code> / <code>.closed</code> logs'],
+  links:['external','observability'],
+  files:['app/core/http/breaker.py'],
+  note:`State is <b>per-process on purpose</b>. Sharing it through Redis would add a network
+        round trip to the very path that exists to avoid waiting on the network, and would make
+        the breaker fail when its own store did.`
+},
+
+queue: {
+  row:'right', color:C.red, kind:'Async', title:'Message queue (Redis broker)',
+  sub:'Celery over Redis',
+  icon:'mail',
+  what:`The queue between the API and the worker. This base uses <b>Redis</b> as the broker and
+        result backend — not RabbitMQ or Kafka. One less moving part, since Redis is already
+        present for caching.`,
+  when:`Whenever work should not happen on the request path: notifications, exports, anything
+        slow or retryable. Call <code>enqueue("task.name", **kwargs)</code>.`,
+  how:`<code>enqueue()</code> <b>verifies the task is registered</b> before publishing. The API
+       and the worker run the same discovery pass, so if the name is missing here the worker
+       does not have it either — which is what stops a job being accepted and silently never
+       run.`,
+  inputs:['A task name and JSON-serialisable arguments'],
+  outputs:['A task id the caller can poll', 'A message on the queue with the ids in its headers'],
+  links:['worker','core','cache','observability'],
+  files:['app/core/jobs/__init__.py — enqueue()','app/core/jobs/celery_app.py'],
+  note:`The old version had a hardcoded <code>include=[...]</code>. A task defined anywhere else
+        was never registered, yet the API happily returned 201 and a task id.
+        <b>The job silently never ran.</b>`
+},
+
+worker: {
+  row:'right', color:C.green, kind:'Async', title:'Background workers',
+  sub:'Celery — same image, different command',
+  icon:'briefcase',
+  what:`A second process running the <b>same image</b> as the API with a different command. It
+        pops messages, imports the task function and runs it.`,
+  when:`Continuously. It is a separate container in compose and a separate deployment in
+        Kubernetes, so it scales independently of the API.`,
+  how:`The hard part is not running work off-request — it is <b>not losing the thread when you
+       do</b>. Celery signals carry the correlation across the process boundary:
+       <code>before_task_publish</code> copies the ids onto the message headers,
+       <code>task_prerun</code> rebinds them inside the worker, <code>task_postrun</code>
+       clears them, and <code>worker_process_init</code> builds the tracer <i>after</i> the
+       fork.`,
+  inputs:['Messages from the broker, with request_id and trace_id in the headers'],
+  outputs:['Task results in the backend',
+           'Log lines carrying the <b>originating</b> request_id',
+           'Audit rows attributed to whoever triggered the work',
+           'Spans that are children of the request that published the message'],
+  links:['queue','db','storage','observability','audit'],
+  files:['app/core/jobs/celery_app.py — the signals and BaseTask'],
+  note:`Every task inherits a retry policy by <i>existing</i>: exponential backoff with jitter
+        for transient failures only. Without jitter, everything that failed during an outage
+        retries in lockstep the moment it ends and knocks the dependency over again.`
+},
+
+audit: {
+  row:'right', color:C.navy, kind:'Compliance', title:'Audit trail',
+  sub:'Append-only, enforced by the database',
+  icon:'shield',
+  what:`A Postgres table recording who did what, to which resource, under which
+        <code>request_id</code> and <code>trace_id</code>.`,
+  when:`On any state change worth being able to prove later. Call
+        <code>write_audit("thing.created", resource_type=..., resource_id=...)</code>.`,
+  how:`The actor and the ids come from <b>context</b>, not from arguments. A caller that forgets
+       to pass an actor cannot silently produce a row attributed to nobody — which is what used
+       to happen, and a confidently wrong actor is worse than a missing row.`,
+  inputs:['An action name and resource identifiers', 'The actor and ids, from context'],
+  outputs:['One immutable row', 'A queryable history joined to logs and traces by request_id'],
+  links:['db','core','worker','observability'],
+  files:['app/core/audit/writer.py','app/core/audit/models.py',
+         'migrations/versions/20260824_2200_harden_audit_immutability.py'],
+  note:`Immutability is <b>not</b> a convention. Row-level and statement-level triggers reject
+        UPDATE, DELETE and TRUNCATE, and the application connects as a least-privilege role so
+        it cannot DROP the triggers. A trigger the app can drop is a comment, not a control.`
+},
+
+/* -------------------------------------------------------- observability -- */
+structlog: {
+  row:'obs', color:C.accent, kind:'Observability', title:'structlog',
+  sub:'JSON to stdout',
+  icon:'terminal',
+  what:`The logging pipeline. Every line is a <b>JSON object with named fields</b>, not a
+        sentence you have to regex.`,
+  when:`Every log call, everywhere — <code>log = get_logger(__name__)</code>.`,
+  how:`The first processor in the chain is <code>merge_contextvars</code>, which copies
+       <code>request_id</code>, <code>trace_id</code> and <code>span_id</code> onto every
+       record as it is written. "Structured" describes the <i>shape of each line</i> — it does
+       not mean a request becomes one line.`,
+  inputs:['log.info("event.name", key=value) calls'],
+  outputs:['One JSON line per event on stdout, each carrying the correlation ids'],
+  links:['promtail','middleware','observability'],
+  files:['app/core/logging.py'],
+  note:`One request legitimately emits many lines — one per notable event. They are
+        <b>grouped</b> by a shared request_id, not merged. There is exactly one summary line:
+        <code>request.completed</code>, with status and duration.`
+},
+
+promtail: {
+  row:'obs', color:C.slate, kind:'Observability', title:'Promtail → Loki',
+  sub:'Ships logs — push',
+  icon:'upload',
+  what:`Promtail tails container stdout via the Docker socket, parses the JSON, and
+        <b>pushes</b> it to Loki, which stores it.`,
+  when:`Continuously, for every container in the compose project.`,
+  how:`Low-cardinality values such as <code>level</code> become <b>labels</b> (Loki creates one
+       stream per label combination). The ids become <b>structured metadata</b> — queryable,
+       but they do not create a new stream per request the way a label would.`,
+  inputs:['Container stdout'],
+  outputs:['Log streams in Loki, filterable by <code>| request_id = "..."</code>'],
+  links:['structlog','grafana'],
+  files:['services/promtail/promtail-config.yaml'],
+  note:`Labelling by request_id would look convenient and would destroy Loki: one stream per
+        request. The same cardinality reasoning as Prometheus labels.`
+},
+
+prometheus: {
+  row:'obs', color:C.navy, kind:'Observability', title:'Prometheus',
+  sub:'Scrapes metrics — pull',
+  icon:'chart',
+  what:`Stores numbers over time. Your app just holds counters in memory and exposes them as a
+        text page at <code>/metrics</code>.`,
+  when:`Every 15 seconds, automatically. You never push to it.`,
+  how:`<b>Prometheus pulls.</b> It fetches <code>/metrics</code> on a schedule and stores each
+       reading with a timestamp; <code>rate()</code> turns the rising counter into a
+       per-second figure. The instrumentator wraps every route, so a new feature is measured
+       with no work.`,
+  inputs:['The /metrics page, every 15s'],
+  outputs:['Time series such as <code>app_http_requests_total</code>, latency histograms, ' +
+           '<code>app_rate_limit_rejected_total</code>'],
+  links:['grafana','api','ratelimit'],
+  files:['app/core/observability.py — configure_metrics()',
+         'services/prometheus/prometheus.yml'],
+  note:`Labels are route template, method and status <b>only</b>. Correlation ids are
+        deliberately not labels — they are unbounded and would create a new time series per
+        request. <b>Ids live in logs and traces; metrics stay aggregate.</b>`
+},
+
+tempo: {
+  row:'obs', color:C.blue, kind:'Observability', title:'OpenTelemetry → Tempo',
+  sub:'Traces — push',
+  icon:'route',
+  what:`OpenTelemetry runs <b>inside</b> your app and produces spans; Tempo stores them. A trace
+        is the tree of spans for one operation, with timings and parent/child links.`,
+  when:`Every request, every task, every S3 and outbound HTTP call.`,
+  how:`A provider is installed even with no exporter configured, so spans still exist and
+       <code>trace_id</code> is real — which is what log correlation needs. Set
+       <code>OTEL_EXPORTER_OTLP_ENDPOINT</code> to also ship them.`,
+  inputs:['Instrumented call sites: FastAPI, SQLAlchemy, Redis, Celery, S3, outbound HTTP'],
+  outputs:['A span waterfall showing where the time went, across processes and services'],
+  links:['grafana','structlog','worker','external'],
+  files:['app/core/observability.py — configure_tracing(), instrument_app()'],
+  note:`OpenTelemetry does <b>not</b> read your logs. It <i>produces</i> the trace_id that
+        structlog then stamps on every line. They meet only in Grafana, at query time, because
+        both carry the same id.`
+},
+
+grafana: {
+  row:'obs', color:C.amber, kind:'Observability', title:'Grafana',
+  sub:'Queries and draws — stores nothing',
+  icon:'chart',
+  what:`The single window onto Loki, Prometheus and Tempo. It holds <b>no data of its own</b>.`,
+  when:`When you want to see what happened. <code>http://localhost:3001</code>, sign in with
+        <code>admin</code> / <code>admin</code>.`,
+  how:`Datasources and dashboards are <b>provisioned from files</b> mounted as volumes, so the
+       dashboard exists the moment the container starts and survives
+       <code>docker compose down -v</code>. Opening a panel sends its query to the datasource
+       and draws the answer; nothing is precomputed.`,
+  inputs:['PromQL against Prometheus', 'LogQL against Loki', 'A trace id for Tempo'],
+  outputs:['Panels, and the ability to follow one request_id across all three stores'],
+  links:['prometheus','promtail','tempo'],
+  files:['services/grafana/provisioning/datasources/datasources.yaml',
+         'services/grafana/dashboards/common-app-base.json'],
+  note:`Panels flat at zero usually means the app is idle, not broken — every metric panel is
+        rate-based. Generate traffic with <code>scripts/seed_demo.py</code> first.`
+},
+
+sentry: {
+  row:'obs', color:C.purple, kind:'Observability', title:'Sentry',
+  sub:'Unhandled exceptions only',
+  icon:'alert',
+  what:`Error reporting for genuine bugs, tagged with the same <code>request_id</code> and
+        <code>trace_id</code>.`,
+  when:`Only for unexpected failures. <b>Expected ones are excluded on purpose</b> — a 404 is
+        not a bug, and paging on it trains people to ignore alerts.`,
+  how:`Configured from <code>SENTRY_DSN</code>. With no DSN it is disabled and says so, once,
+       as <code>sentry.disabled</code>. Deduplication is on, so one failure is one event.`,
+  inputs:['Exceptions that escape a route or a task'],
+  outputs:['A Sentry event carrying the correlation ids'],
+  links:['errors','middleware'],
+  files:['app/core/errors.py — configure_sentry()'],
+  note:`Disabled locally by design. That is not a broken integration.`
+},
+
+/* ---------------------------------------------------------- supporting -- */
+docs: {
+  row:'hidden', color:C.slate, kind:'Entry point', title:'Swagger / OpenAPI',
+  sub:'Served by the base, under a strict CSP',
+  icon:'globe',
+  what:`Interactive API documentation at <code>/docs</code>, generated from your route
+        signatures and Pydantic models.`,
+  when:`To explore or hand-test an endpoint without writing a client.`,
+  how:`FastAPI's built-in docs routes are switched off and re-served by
+       <code>app/core/api/docs.py</code>, so the inline bootstrap script can be pinned by hash
+       and survive a strict Content-Security-Policy.`,
+  inputs:['The route table and your Pydantic schemas'],
+  outputs:['A live, executable API reference'],
+  links:['api'],
+  files:['app/core/api/docs.py'],
+  note:`A browser end-to-end test asserts that the page renders <b>and</b> that "Try it out"
+        reaches the live API — the CSP has broken it before.`
+},
+
+migrations: {
+  row:'hidden', color:C.amber, kind:'Data', title:'Migrations (Alembic)',
+  sub:'Version control for the schema',
+  icon:'db',
+  what:`Your code is versioned by git; your database schema is versioned here. Each change is a
+        reviewed Python file, and the files form a chain.`,
+  when:`Any time a model changes. <code>make revision m="..."</code> then
+        <code>make migrate</code>.`,
+  how:`<code>migrations/env.py</code> imports every discovered model <b>before</b> reading
+       metadata, which is what makes a forgotten registration impossible. It connects as the
+       schema owner, while the application connects as a least-privilege role.`,
+  inputs:['Your models, and the live database'],
+  outputs:['A migration file', 'An updated schema'],
+  links:['db','audit'],
+  files:['migrations/env.py','migrations/versions/'],
+  note:`Autogenerate <b>refuses to emit a DROP</b> unless <code>ALLOW_DESTRUCTIVE=1</code>. A
+        model that failed to import is indistinguishable from a deleted table, and this stops
+        that mistake erasing data.`
+},
+
+observability: {
+  row:'hidden', color:C.accent, kind:'Concept', title:'The Correlation Contract',
+  sub:'One id, five stores',
+  icon:'route',
+  what:`The guarantee the whole base exists to serve: quote one <code>request_id</code> and get
+        the logs, the trace, the audit rows, the metric movement and the error — from five
+        independent systems.`,
+  when:`Every request, automatically. Nothing opts in.`,
+  how:`The middleware generates or accepts the id and binds it into contextvars. structlog
+       stamps it on every line, the audit writer reads it from context, Celery copies it onto
+       message headers, and the outbound client sends it to the next service.`,
+  inputs:['One request'],
+  outputs:['The same id present in Loki, Tempo, Postgres, Prometheus and Sentry'],
+  links:['structlog','tempo','audit','prometheus','external'],
+  files:['scripts/smoke.py — proves it, and fails if any store is missing the id'],
+  note:`<code>make smoke</code> drives three real requests and then queries every store
+        independently. The point is not that the app responded — it is that
+        <b>one id joins five systems</b>.`
+},
+
+/* ----------------------------------------------------------- infra chips -- */
+docker:{row:'infra', color:C.blue, kind:'Infrastructure', title:'Docker &amp; Compose',
+  sub:'Ten services, one command', icon:'box',
+  what:`The local stack: app, worker, Postgres, Redis, MinIO, Loki, Promtail, Prometheus,
+        Tempo and Grafana. The app and worker share <b>one image</b>.`,
+  when:`<code>make up</code> to start everything, <code>make down</code> to stop and remove
+        volumes.`,
+  how:`Every service has a real healthcheck and dependencies wait on
+       <code>service_healthy</code>, so the stack comes up in a usable order rather than
+       racing.`,
+  inputs:['services/app/Dockerfile', 'deploy/docker-compose.yml'],
+  outputs:['A running stack on documented ports'],
+  links:['api','worker','grafana'],
+  files:['deploy/docker-compose.yml','services/app/Dockerfile'],
+  note:`Five of the ten are development conveniences. In production Grafana, Loki, Prometheus
+        and Tempo are shared cluster infrastructure, and you ship one image.`},
+
+k8s:{row:'infra', color:C.blue, kind:'Infrastructure', title:'Kubernetes manifests',
+  sub:'The deployment target', icon:'box',
+  what:`Deployment, service, config and secret manifests for running the same image in a
+        cluster.`,
+  when:`When deploying beyond local compose.`,
+  how:`Probes map to <code>/health/live</code> and <code>/health/ready</code>. Secrets are
+       placeholders meant to be replaced by External Secrets, Sealed Secrets or the Azure Key
+       Vault CSI driver.`,
+  inputs:['The built image, and real secrets'],
+  outputs:['A running deployment'],
+  links:['docker','health'],
+  files:['deploy/k8s/'],
+  note:`The app <b>refuses to start</b> outside <code>local</code> on the shipped compose
+        defaults, and names every offending setting. That is deliberate: booting prod on a
+        published password is not a smaller problem than crashing.`},
+
+trivy:{row:'infra', color:C.red, kind:'Security gate', title:'Trivy',
+  sub:'Dependencies, secrets, misconfiguration', icon:'shield',
+  what:`A security scanner run in CI. It checks your locked dependencies and the OS packages in
+        the built image for CVEs, the repository for committed credentials, and the Docker and
+        Kubernetes files for unsafe configuration.`,
+  when:`On every commit, in CI only — never in the local loop, because the vulnerability
+        database is large.`,
+  how:`HIGH and CRITICAL break the build; lower findings are reported to the Security tab but
+       do not fail it. Unfixed CVEs are ignored, because there is no action you can take.`,
+  inputs:['uv.lock', 'the built image', 'compose and Kubernetes YAML'],
+  outputs:['A pass/fail gate, and SARIF for the Security tab'],
+  links:['ci','docker'],
+  files:['trivy.yaml','trivy-secret.yaml','.trivyignore.yaml'],
+  note:`Every suppression names an <b>ID and a path</b> and carries a written justification.
+        Nothing is globally muted — that is the difference between a security gate and
+        security theatre.`},
+
+ci:{row:'infra', color:C.green, kind:'Quality gate', title:'CI pipeline',
+  sub:'What runs on every commit', icon:'check',
+  what:`Lint and format, the architecture boundary contracts, mypy, the full test suite with a
+        coverage gate, then build and scan the image.`,
+  when:`Every push and pull request.`,
+  how:`The image is built with <code>push: false, load: true</code>, scanned, and only then
+       pushed — so a vulnerable image never reaches the registry.`,
+  inputs:['A commit'],
+  outputs:['A pass/fail verdict', 'A scanned image'],
+  links:['trivy','tests'],
+  files:['.github/workflows/ci.yml','Makefile'],
+  note:`<code>make lint</code> includes the import-linter contracts, so editing the base to add
+        a feature fails the build on the commit that did it.`},
+
+tests:{row:'infra', color:C.accent, kind:'Quality gate', title:'Test suite',
+  sub:'216 tests · 90% coverage', icon:'check',
+  what:`Unit tests that need nothing external, integration tests against the real compose stack,
+        and browser end-to-end tests.`,
+  when:`<code>make test</code>. Run <code>make up</code> first for the integration layer.`,
+  how:`Most unit tests are <b>regression tests that name a specific bug in their docstring</b> —
+       read <code>tests/unit/</code> top to bottom and you get the changelog of everything that
+       was once broken and now cannot break again.`,
+  inputs:['The application code'],
+  outputs:['A pass/fail verdict and a coverage figure'],
+  links:['ci'],
+  files:['tests/unit/','tests/integration/','tests/e2e/'],
+  note:`Integration tests <b>skip with a stated reason</b> when the stack is down, so a missing
+        stack never masquerades as a passing suite.`},
+
+health:{row:'infra', color:C.green, kind:'Operations', title:'Health probes',
+  sub:'Liveness and readiness', icon:'check',
+  what:`<code>/health/live</code> answers if the process is up. <code>/health/ready</code>
+        actually checks Postgres, Redis and object storage.`,
+  when:`Continuously, by the orchestrator.`,
+  how:`Readiness checks are <b>registered</b> in <code>create_app()</code>, so the health module
+       never has to know which dependencies a given deployment happens to use.`,
+  inputs:['A probe request'],
+  outputs:['200, or 503 with the failing dependency named'],
+  links:['api','db','cache','storage'],
+  files:['app/core/api/health.py','app/main.py — register_readiness_check'],
+  note:`The two health routes are mounted <b>explicitly</b>, not discovered — an orchestrator
+        needs a liveness probe even from an app whose plugins all failed to load.`}
+};
+
+/* --------------------------- what lives inside Core Logic ---------------- */
+const CORE_SERVICES = [
+  ['app/services/demo.py',
+   'Example CRUD plus a deliberate <code>/demo/boom</code> failure. Scaffolding — it is what proves the error path, the log format and the Sentry wiring actually work on a fresh clone.'],
+  ['app/services/demo_tasks.py',
+   'Example Celery tasks. Proves discovery registers a task and that the ids survive into the worker.'],
+  ['app/services/files.py',
+   'Upload and download. The split is the point: the object store holds the bytes, Postgres holds the metadata and key, audit records who uploaded what.'],
+  ['app/services/tickets/  <span style="color:var(--amber)">(branch poc/support-tickets)</span>',
+   'The real proof: 7 endpoints, 2 background tasks, a status state machine, cache-aside reads, MinIO attachments and audit on every write — built with <b>zero</b> lines changed in app/core or app/main.py.']
+];
+
+const CORE_PROVIDES = [
+  ['db','Sessions, models, migrations'], ['cache','Cache-aside reads'],
+  ['storage','Object storage'], ['queue','Enqueue background work'],
+  ['worker','Run it, correlated'], ['audit','Prove who did what'],
+  ['external','Call other services'], ['errors','Fail in one shape'],
+  ['structlog','Log with the ids attached'], ['observability','The correlation contract']
+];
+
+/* ============================== icons =================================== */
+const ICONS={
+ globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/>',
+ layers:'<path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="M3 14l9 5 9-5"/>',
+ gauge:'<path d="M12 21a9 9 0 1 1 9-9"/><path d="M12 12l5-3"/>',
+ alert:'<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17h.01"/>',
+ db:'<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+ folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+ cloud:'<path d="M6 18a4 4 0 0 1 .8-7.9A6 6 0 0 1 18.6 10a3.5 3.5 0 0 1-.6 8z"/>',
+ mail:'<rect x="2" y="5" width="20" height="14" rx="2"/><path d="m2 7 10 6 10-6"/>',
+ briefcase:'<rect x="2" y="7" width="20" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+ shield:'<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/>',
+ terminal:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M13 15h5"/>',
+ upload:'<path d="M12 16V4M8 8l4-4 4 4"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
+ chart:'<path d="M3 21V3"/><path d="M3 17l5-5 4 4 8-8"/>',
+ route:'<circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="6" r="2.5"/><path d="M8.5 18H14a4 4 0 0 0 0-8H9a4 4 0 0 1 0-8h1"/>',
+ box:'<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+ check:'<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>'
+};
+const svg=n=>`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+  stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]||ICONS.box}</svg>`;
+
+/* ============================== render ================================== */
+function blockEl(id){
+  const b=BLOCKS[id];
+  const el=document.createElement('button');
+  el.className='blk'; el.dataset.id=id; el.style.setProperty('--c',b.color);
+  el.innerHTML=`<div class="t">${svg(b.icon)}${b.title}</div><div class="s">${b.sub}</div>`;
+  return el;
+}
+const put=(sel,ids)=>ids.forEach(id=>document.querySelector(sel).appendChild(blockEl(id)));
+
+put('#row-entry',['api','middleware','ratelimit','errors']);
+put('#col-left', ['db','cache','storage']);
+put('#col-right',['external','queue','worker','audit']);
+put('#row-obs',  ['structlog','promtail','prometheus','tempo']);
+['grafana','sentry'].forEach(id=>document.querySelector('#row-obs').appendChild(blockEl(id)));
+
+const infra=document.querySelector('#row-infra');
+['docker','k8s','trivy','ci','tests','health','migrations','docs','observability'].forEach(id=>{
+  const c=document.createElement('button');
+  c.className='chip'; c.dataset.id=id; c.textContent=BLOCKS[id].title.replace(/&amp;/g,'&');
+  infra.appendChild(c);
+});
+
+/* ============================== panel =================================== */
+const panel=document.getElementById('panel');
+const P={kind:document.getElementById('p-kind'),title:document.getElementById('p-title'),
+         sub:document.getElementById('p-sub'),body:document.getElementById('p-body')};
+let currentId=null;
+
+const sec=(h,html)=>`<div class="sec"><h3>${h}</h3>${html}</div>`;
+const list=a=>`<ul>${a.map(x=>`<li>${x}</li>`).join('')}</ul>`;
+
+function open(id){
+  const b=BLOCKS[id]; if(!b) return;
+  currentId=id;
+  document.body.classList.add('panel-open');
+  panel.style.setProperty('--pc',b.color);
+  P.kind.textContent=b.kind; P.kind.style.color=b.color;
+  P.title.innerHTML=b.title; P.sub.innerHTML=b.sub;
+
+  let h='';
+  h+=sec('What it is',`<p>${b.what}</p>`);
+  h+=sec('When do we use it',`<p>${b.when}</p>`);
+  h+=sec('How it is used in this application',`<p>${b.how}</p>`);
+  h+=sec('What it gets &amp; what it produces',
+    `<div class="io"><div class="in"><h4>Gets</h4>${list(b.inputs)}</div>`+
+    `<div><h4>Produces</h4>${list(b.outputs)}</div></div>`);
+  if(b.links&&b.links.length)
+    h+=sec('Connected to',`<div class="links">${b.links.map(l=>
+      `<button data-goto="${l}">${BLOCKS[l]?BLOCKS[l].title.replace(/&amp;/g,'&'):l} &rarr;</button>`).join('')}</div>`);
+  if(b.files) h+=sec('Where it lives',`<div class="files">${b.files.map(f=>`<div>${f}</div>`).join('')}</div>`);
+  if(b.verified) h+=sec('Verified',`<div class="note ok">${b.verified}</div>`);
+  if(b.note) h+=sec('Worth knowing',`<div class="note">${b.note}</div>`);
+  P.body.innerHTML=h; P.body.scrollTop=0;
+  paint(id);
+}
+
+function openCore(){
+  currentId='core';
+  document.body.classList.add('panel-open');
+  panel.style.setProperty('--pc','var(--blue)');
+  P.kind.textContent='Your code'; P.kind.style.color='var(--blue)';
+  P.title.textContent='Core Logic';
+  P.sub.innerHTML='app/services/** — the only folder you edit';
+
+  let h='';
+  h+=sec('What it is',
+   `<p>The business logic. Everything else on this page exists to serve it.
+      A feature is a module or package under <code>app/services/</code> that defines a
+      module-level <code>router</code>, a Celery task, a SQLAlchemy model, or all three —
+      and is picked up automatically.</p>`);
+  h+=sec('The rule',
+   `<div class="note"><b>app/core/</b> is infrastructure — do not edit it to add a feature.
+     <b>app/services/</b> is where business logic goes. An import-linter contract fails the
+     build if <code>app.core</code> imports <code>app.services</code>, so the boundary cannot
+     erode quietly.</div>`);
+  h+=sec('Services inside this block',
+    CORE_SERVICES.map(([n,d])=>`<div class="svc"><div class="n">${n}</div><div class="d">${d}</div></div>`).join(''));
+  h+=sec('What the base hands you (click any)',
+   `<div class="links">${CORE_PROVIDES.map(([id,label])=>
+      `<button data-goto="${id}">${label} &rarr;</button>`).join('')}</div>`);
+  h+=sec('What it gets &amp; what it produces',
+   `<div class="io"><div class="in"><h4>Gets</h4>${list([
+      'A validated request, with request_id and trace_id already bound',
+      'A database session that commits on success and rolls back on failure',
+      'Cache, object storage, the queue and the outbound client, as interfaces'])}</div>
+    <div><h4>Produces</h4>${list([
+      'A response, or an AppError that becomes the standard error shape',
+      'Rows, cached values, stored objects, queued jobs',
+      'Audit rows, log lines, spans and metrics — without writing any of that code'])}</div></div>`);
+  h+=sec('Adding one',
+   `<div class="files"><div>app/services/thing/</div><div>  __init__.py</div>
+     <div>  models.py   # SQLAlchemy models</div>
+     <div>  router.py   # router = APIRouter(prefix="/things")</div>
+     <div>  tasks.py    # @celery_app.task functions</div></div>
+    <p style="margin-top:9px">Then <code>make revision m="add thing"</code> and
+      <code>make migrate</code> — discovery makes the model visible to Alembic, but nothing
+      here writes DDL behind your back.</p>`);
+  h+=sec('Worth knowing',
+   `<div class="note ok">The support-ticket POC — 7 endpoints, 2 background tasks, file
+     attachments, a status state machine — was built entirely this way.
+     <code>git diff master -- app/core app/main.py</code> comes back <b>empty</b>.</div>`);
+  P.body.innerHTML=h; P.body.scrollTop=0;
+  paint('core');
+}
+
+function paint(id){
+  const b = id==='core' ? {links:CORE_PROVIDES.map(p=>p[0])} : BLOCKS[id];
+  const near=new Set([id,...(b.links||[])]);
+  document.querySelectorAll('.blk').forEach(el=>{
+    const i=el.dataset.id;
+    el.classList.toggle('active', i===id);
+    el.classList.toggle('linked', i!==id && near.has(i));
+    el.classList.toggle('dim',    !near.has(i));
+  });
+}
+function clear(){
+  document.body.classList.remove('panel-open'); currentId=null;
+  document.querySelectorAll('.blk').forEach(el=>el.classList.remove('active','linked','dim'));
+}
+
+/* hover preview — only while nothing is pinned open */
+document.addEventListener('mouseover',e=>{
+  const el=e.target.closest('.blk'); if(!el||currentId) return;
+  const id=el.dataset.id;
+  const b = id==='core' ? {links:CORE_PROVIDES.map(p=>p[0])} : BLOCKS[id];
+  const near=new Set([id,...(b.links||[])]);
+  document.querySelectorAll('.blk').forEach(x=>{
+    x.classList.toggle('linked', x.dataset.id!==id && near.has(x.dataset.id));
+    x.classList.toggle('dim',   !near.has(x.dataset.id));
+  });
+});
+document.addEventListener('mouseout',e=>{
+  if(currentId||e.relatedTarget?.closest('.blk')) return;
+  document.querySelectorAll('.blk').forEach(x=>x.classList.remove('linked','dim'));
+});
+
+document.addEventListener('click',e=>{
+  const goto=e.target.closest('[data-goto]');
+  if(goto){ const t=goto.dataset.goto; t==='core'?openCore():open(t); return; }
+  const el=e.target.closest('.blk,.chip');
+  if(el){ el.dataset.id==='core'?openCore():open(el.dataset.id); return; }
+});
+document.getElementById('close').addEventListener('click',clear);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') clear(); });
+</script>
+</body>
+</html>

@@ -55,10 +55,20 @@ class AppError(Exception):
     status_code: int = status.HTTP_400_BAD_REQUEST
     error_code: str = "app_error"
 
-    def __init__(self, message: str, *, detail: Any | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        detail: Any | None = None,
+        response_headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.detail = detail
+        #: Headers the caller needs in order to *act* on the failure -- notably
+        #: `Retry-After`. Kept on the exception rather than passed at the raise
+        #: site so the handler stays the single place a response is built.
+        self.response_headers = response_headers or {}
 
 
 class NotFoundError(AppError):
@@ -88,12 +98,52 @@ class PayloadTooLargeError(AppError):
     error_code = "payload_too_large"
 
 
+class RateLimitedError(AppError):
+    """The caller exceeded its request budget.
+
+    Always raised with a `Retry-After` header: a 429 that does not say *when* to
+    come back invites an immediate retry, which is the behaviour the limit
+    exists to prevent.
+    """
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    error_code = "rate_limited"
+
+
+class UpstreamError(AppError):
+    """A dependency this service calls out to failed.
+
+    Deliberately a 502 and not a 500: the fault is not in this service, and the
+    distinction is what stops an upstream incident paging the wrong team.
+    """
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    error_code = "upstream_error"
+
+
+class UpstreamTimeoutError(UpstreamError):
+    status_code = status.HTTP_504_GATEWAY_TIMEOUT
+    error_code = "upstream_timeout"
+
+
+class UpstreamUnavailableError(UpstreamError):
+    """Raised when a circuit breaker is open, so the call was never attempted.
+
+    A 503 rather than a 502: nothing was sent, and the condition is expected to
+    clear on its own -- which is exactly what `Retry-After` communicates.
+    """
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    error_code = "upstream_unavailable"
+
+
 def _render(
     status_code: int,
     error: str,
     message: str,
     detail: Any | None = None,
     request: Request | None = None,
+    headers: dict[str, str] | None = None,
 ) -> JSONResponse:
     """Build the error response, stamping the correlation ids and security headers."""
     request_id = current_request_id()
@@ -117,6 +167,11 @@ def _render(
         response.headers["X-Request-ID"] = request_id
     if trace_id:
         response.headers["X-Trace-ID"] = trace_id
+
+    # Headers the caller needs to act on the failure, e.g. `Retry-After` on a
+    # 429 or a 503.
+    for name, value in (headers or {}).items():
+        response.headers[name] = value
 
     # Starlette's ServerErrorMiddleware is the OUTERMOST layer, so a 500 it
     # generates never passes back through SecurityHeadersMiddleware. Stamp the
@@ -142,7 +197,14 @@ def register_exception_handlers(app: FastAPI) -> None:
             http_path=request.url.path,
             message=exc.message,
         )
-        return _render(exc.status_code, exc.error_code, exc.message, exc.detail, request)
+        return _render(
+            exc.status_code,
+            exc.error_code,
+            exc.message,
+            exc.detail,
+            request,
+            headers=exc.response_headers,
+        )
 
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
