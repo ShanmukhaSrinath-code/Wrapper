@@ -23,6 +23,11 @@ compactor:
 storage:
   trace:
     backend: local
+    # Keep this well under ingester.complete_block_timeout above -- otherwise
+    # the querier doesn't learn about a just-flushed block for up to 5m
+    # (Tempo's default poll), and a lookup in that gap 404s on a trace that
+    # really does exist.
+    blocklist_poll: 5s
     wal:
       path: /var/tempo/wal
     local:

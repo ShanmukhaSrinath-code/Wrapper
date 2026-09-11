@@ -88,7 +88,7 @@ async def get_json(key: str) -> Any | None:
             await get_client().delete(key)
         return None
 
-
+#Saves data into Redis as text with an expiration timer.
 async def set_json(key: str, value: Any, ttl_seconds: int | None = None) -> None:
     """Store ``value`` as JSON with a TTL (defaults to ``CACHE_TTL_SECONDS``).
 
@@ -101,7 +101,7 @@ async def set_json(key: str, value: Any, ttl_seconds: int | None = None) -> None
     except CACHE_OUTAGE_ERRORS as exc:
         log.warning("cache.unavailable", operation="set", key=key, error=str(exc))
 
-
+# Deletes one or multiple keys from Redis.
 async def delete(*keys: str) -> int:
     """Drop keys; returns how many existed (0 if the cache is unreachable)."""
     if not keys:

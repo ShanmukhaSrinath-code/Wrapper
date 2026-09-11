@@ -95,8 +95,8 @@ class BaseTask(Task):
 celery_app = Celery(
     "common-app-base",
     task_cls=BaseTask,
-    broker=settings.broker_url,
-    backend=settings.result_backend,
+    broker=settings.broker_url,#jobs are queued in Redis, not RabbitMQ, so the broker is the Redis URL
+    backend=settings.result_backend,#where task results are stored, also Redis in this case
     # No `include=[...]`: task modules are discovered, not listed. See
     # `load_tasks()` at the bottom of this module.
 )
@@ -119,7 +119,7 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
 )
 
-
+#Use your application's structlog configuration instead of Celery's default logging.
 @setup_logging.connect
 def _configure_worker_logging(**_: Any) -> None:
     """Use our structlog pipeline in the worker, not Celery's own format.
@@ -129,7 +129,7 @@ def _configure_worker_logging(**_: Any) -> None:
     """
     configure_logging()
 
-
+#It runs before a task is sent to Redis.
 @before_task_publish.connect
 def _propagate_context(headers: dict[str, Any] | None = None, **_: Any) -> None:
     """Copy the caller's correlation ids onto the outgoing message."""
@@ -174,14 +174,14 @@ def _bind_context(task_id: str | None = None, task: Any = None, **_: Any) -> Non
     )
     log.info("task.started", task_id=task_id, task_name=getattr(task, "name", None))
 
-
+#runs after the task is finished, clears the request context and actor to avoid leaking information between tasks. This is important for maintaining isolation and ensuring that each task runs with its own context.
 @task_postrun.connect
 def _unbind_context(task_id: str | None = None, state: str | None = None, **_: Any) -> None:
     log.info("task.finished", task_id=task_id, task_state=state)
     clear_request_context()
-    clear_actor()
+    clear_actor()#ensures each task runs with its own context and does not leak information between tasks. This is important for maintaining isolation and ensuring that each task runs with its own context.
 
-
+#it is important to log the failure and send it to Sentry, so that we can track and debug issues in our tasks. The `_report_failure` function is connected to the `task_failure` signal, which is triggered whenever a task fails. It logs the failure with its task ID and error message, and if Sentry is active, it captures the exception for further analysis. This helps us maintain visibility into the health of our background jobs and allows us to respond to failures appropriately.
 @task_failure.connect
 def _report_failure(
     task_id: str | None = None, exception: BaseException | None = None, **_: Any
@@ -259,3 +259,5 @@ def _configure_worker_tracing(**_: Any) -> None:
 
     configure_tracing(settings)
     instrument_celery()
+#
+#this file makes sure that when a job moves from FastAPI → Redis → Celery Worker, it doesn't lose who started it, which request it belongs to, and which trace it belongs to.

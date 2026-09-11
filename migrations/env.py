@@ -35,7 +35,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-
+#this is the Alembic "env.py" file, which is the entry point for running migrations. It sets up the database connection and runs migrations either in "offline" mode (generating SQL scripts) or "online" mode (applying changes to a live database). The code ensures that all models are imported before generating migration scripts, and it uses a custom function to reject destructive operations during autogeneration.
 def run_migrations_offline() -> None:
     """Emit SQL to stdout without a live connection."""
     context.configure(

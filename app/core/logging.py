@@ -122,7 +122,7 @@ def mark_traceback_logged(exc: BaseException) -> None:
     with contextlib.suppress(Exception):
         object.__setattr__(exc, _LOGGED_FLAG, True)
 
-
+#checks if the traceback for a given exception has already been logged, to avoid duplicate logging of the same error. This is important for maintaining clean and readable logs, especially in cases where exceptions are re-raised or handled multiple times in the application stack. By marking exceptions that have already been logged, we can prevent redundant log entries and ensure that each unique error is only logged once, improving the overall clarity of our logging output.
 def traceback_already_logged(exc: BaseException) -> bool:
     return bool(getattr(exc, _LOGGED_FLAG, False))
 

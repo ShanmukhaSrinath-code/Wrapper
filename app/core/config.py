@@ -83,8 +83,8 @@ class Settings(BaseSettings):
     postgres_app_password: str = "appruntimepassword"  # noqa: S105 - local compose default
     postgres_db: str = "appdb"
     db_pool_size: int = 5
-    db_max_overflow: int = 10
-    db_echo: bool = False
+    db_max_overflow: int = 10#how many extra connections beyond the pool size can be opened when demand spikes
+    db_echo: bool = False #should always be true in production, but can be set to false for local development to reduce log noise
 
     # --- redis ---------------------------------------------------------------
     redis_host: str = "localhost"

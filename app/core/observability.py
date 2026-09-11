@@ -60,7 +60,7 @@ def configure_tracing(config: Settings) -> None:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
         exporter = OTLPSpanExporter(
-            endpoint=f"{config.otel_exporter_otlp_endpoint.rstrip('/')}/v1/traces"
+             endpoint=f"{config.otel_exporter_otlp_endpoint.rstrip('/')}/v1/traces"
         )
         provider.add_span_processor(BatchSpanProcessor(exporter))
         log.info("otel.exporter.configured", endpoint=config.otel_exporter_otlp_endpoint)

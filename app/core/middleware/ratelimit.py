@@ -84,15 +84,16 @@ class RateLimitMiddleware:
         self._script_client: Any = None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        #if the request is not HTTP or rate limiting is disabled, pass through
         if scope["type"] != "http" or not self._config.rate_limit_enabled:
             await self.app(scope, receive, send)
             return
-
+        #if any path is exempt from rate limiting, no ratelimiting is applied to that path
         path = scope.get("path", "")
         if path in self._exempt:
             await self.app(scope, receive, send)
             return
-
+#tells who request/ratelimit is for, and what the limit is, and how long until the limit resets
         request = Request(scope)
         client_key = self._client_key(request)
         allowed, remaining, reset_seconds = await self._consume(client_key)
@@ -120,7 +121,7 @@ class RateLimitMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_budget)
-
+#Determines which client/IP gets the rate-limit bucket
     # -- internals ----------------------------------------------------------
     def _client_key(self, request: Request) -> str:
         """Identify the caller.
@@ -135,7 +136,7 @@ class RateLimitMiddleware:
             if forwarded:
                 return forwarded.split(",")[0].strip()
         return request.client.host if request.client else "unknown"
-
+#Increments/checks the client's Redis counter
     async def _consume(self, client_key: str) -> tuple[bool, int, int]:
         """Count one request. Returns ``(allowed, remaining, reset_seconds)``."""
         redis = get_client()
