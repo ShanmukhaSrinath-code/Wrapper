@@ -1,13 +1,16 @@
 ---
 name: import-poc
-description: Port a standalone POC/prototype project (backend AND frontend) living in another folder onto this base, wholesale — backend logic rewritten through core seams, frontend built and served alongside it. Use whenever asked to import, migrate, integrate, wire in, or "plug in" an external POC/prototype/target folder into this codebase.
+description: Port a standalone POC/prototype project (backend AND frontend) living in another folder onto this base, wholesale — backend logic rewritten through core seams, frontend built and served alongside it, plus three interactive architecture diagrams (the POC's own shape, the clean base, and the two merged). Use whenever asked to import, migrate, integrate, wire in, or "plug in" an external POC/prototype/target folder into this codebase.
 ---
 
 # Importing a POC
 
 The goal: point this skill at a POC folder and get back a working whole —
 backend AND frontend, if the POC has one — built on top of this base, in one
-pass. A user should not need to hand-assemble the pieces afterward.
+pass. A user should not need to hand-assemble the pieces afterward. The port
+is only finished once three architecture diagrams exist in
+`docs/architecture/` (step 8) — they are part of the deliverable, exactly like
+the migration or the tests, not optional documentation.
 
 A POC's **backend** is a source of business logic only. Its own logging,
 auth, error handling, DB session code, cache client, storage client, HTTP
@@ -394,6 +397,76 @@ Finish with a short report, always including:
    implies a base-wide change). A frontend existing is not one of these
    anymore — it should already be built and running by the time you report.
 
+## 8. Generate the three architecture artifacts
+
+Every import produces three interactive HTML diagrams in `docs/architecture/`,
+built from the templates in `.claude/skills/import-poc/assets/`. They are part
+of the deliverable, not optional documentation — generate them every time,
+not just when asked.
+
+All three share one design system (same CSS, same click-to-open-a-side-panel
+JS engine) so a reader learns the interaction once. Copy an existing generated
+page as your starting point rather than writing from scratch — `docs/architecture/talentiq-integrated.html`
+is the reference example.
+
+**Page 1 — `docs/architecture/common-app-base.html`.** A straight copy of
+`assets/architecture-base.template.html`, unmodified. This is the base with
+`CORE_SERVICES` deliberately empty — regenerate it only if the base itself
+changed; otherwise just make sure the file exists.
+
+**Page 2 — `docs/architecture/<feature>-poc-original.html`.** Diagrams the
+POC as it existed *before* porting — its own frontend, its own backend
+framework, its own database access, its own (usually missing) auth/logging/
+observability. Build this from `assets/architecture-poc.template.html`, filled
+in from your **step 0/1 findings** — the boundary scan and inventory you
+already did. Do not invent content: every `what`/`how`/`note` string must
+trace back to a real file and real code you actually read. Mark any row under
+"Operational maturity" as `class="blk missing"` when the POC genuinely has
+none of it (most POCs have no auth, no structured logging, no observability at
+all — say so plainly, that gap is exactly what porting fixes).
+
+**Page 3 — `docs/architecture/<feature>-integrated.html`.** The real payoff.
+Clone `assets/architecture-base.template.html` (or `talentiq-integrated.html`
+as a worked example) and, for **every block that is even remotely touched**,
+add a `used` property rendered as a highlighted "In this application" panel
+section — not just the Core Logic block. Concretely:
+
+- `api` — every real route this feature mounted (path + method), not "see the
+  router file."
+- `db` — every real table name, and why the PK types were chosen (e.g. kept
+  as integers because the frontend does `Number(id)` somewhere — check step
+  2a's findings for this).
+- `cache` / `storage` / `breaker` — if the feature genuinely doesn't use one
+  of these, **say so explicitly** (`unused: true`, a grey "not used" note, not
+  silence). A reader should be able to tell what a feature *doesn't* touch as
+  easily as what it does.
+- `external` — name the actual third-party service and library (e.g. "Groq
+  via the OpenAI SDK, not through `app.core.http`" — and say why, if the
+  reason is a real one like "a typed SDK with its own retry semantics").
+- `queue`/`worker` — the actual registered task name(s).
+- `audit` — the actual event-name strings the feature writes
+  (`write_audit("thing.created", ...)`), not a generic description.
+- Observability blocks (`structlog`/`promtail`/`prometheus`/`tempo`/`grafana`/
+  `sentry`) — usually just "inherited automatically, no feature code needed,"
+  which is itself worth stating rather than leaving blank.
+- `docker` — the exact new service names added, if any.
+- `tests` — the real test file name and what it actually covers.
+
+**If the port added a capability the base genuinely didn't have before**
+(a frontend, a periodic scheduler, anything from step 0's stop-and-ask table
+that got a yes) **add it as a new block**, not a footnote inside an existing
+one — give it `kind: '... (new)'` so it renders with the green "NEW" badge,
+same as `frontend` and `beat` do in the TalentIQ example. That badge is the
+visual answer to "what did this port actually add to the base's capabilities,"
+which is usually the single most useful thing in the diagram for a reviewer
+who already knows the base.
+
+Verify all three render before reporting done: extract the `<script>` block
+and run `node --check` on it (see the worked example's verification — this
+catches template-literal/quote escaping mistakes, the most common way these
+pages silently break). Then actually open each one and click through at least
+the new/changed blocks.
+
 ## Anti-patterns to refuse
 
 | Tempting | Do this instead |
@@ -415,3 +488,7 @@ Finish with a short report, always including:
 | build a WebSocket/SSE feature by improvising something inside the feature package | stop and ask (step 0) — this base has no real-time seam, and inventing one silently is an infra decision in disguise |
 | reset/truncate a user table without telling the user to re-authenticate | say so immediately (step 7d) — an old JWT will keep decoding successfully and fail later, confusingly, on an unrelated write |
 | silently skip a piece that didn't map cleanly | say so explicitly in the final report |
+| skip step 8's architecture artifacts because the port already "feels done" | generate all three — they're part of the deliverable, not optional polish |
+| only fill in the Core Logic block on the integrated page | every touched block gets an "In this application" section — `db`, `external`, `audit`, `queue` especially |
+| leave a block's real usage unstated when the feature doesn't use it | mark it `unused: true` with a grey note saying so explicitly — silence there reads as "forgot to check," not "not applicable" |
+| ship an architecture HTML page without checking it renders | `node --check` the extracted `<script>` block before reporting done — a stray unescaped quote in a content string breaks the whole page silently |

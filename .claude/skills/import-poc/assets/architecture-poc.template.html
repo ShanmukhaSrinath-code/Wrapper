@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{POC_NAME}} — Original Architecture (before porting)</title>
+<style>
+  :root{
+    --navy:#0f172a; --navy2:#1e293b; --slate:#475569; --body:#334155;
+    --muted:#94a3b8; --line:#e2e8f0; --pale:#f8fafc; --light:#f1f5f9;
+    --accent:#0d9488; --blue:#2563eb; --amber:#d97706; --green:#159e5b;
+    --red:#dc2626; --purple:#7c3aed;
+    --panel-w: 480px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font:15px/1.55 "Segoe UI",system-ui,-apple-system,sans-serif; color:var(--body); background:#fff; -webkit-font-smoothing:antialiased}
+  code,.mono{font-family:Consolas,"SF Mono",Menlo,monospace}
+  .wrap{display:flex; min-height:100vh}
+  .stage{flex:1; min-width:0; padding:28px 32px 60px; transition:margin-right .25s ease}
+  body.panel-open .stage{margin-right:var(--panel-w)}
+  header h1{margin:0 0 4px; font-size:26px; color:var(--navy); letter-spacing:-.01em}
+  header p{margin:0 0 4px; color:var(--slate); font-size:14.5px}
+  .hint{display:inline-flex; align-items:center; gap:8px; margin-top:12px; background:var(--light); border:1px solid var(--line); border-radius:999px; padding:6px 14px; font-size:13px; color:var(--slate)}
+  .hint b{color:var(--navy)}
+  .band{margin-top:26px}
+  .band-label{font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); font-weight:700; margin-bottom:9px}
+  .row{display:grid; gap:14px; margin-bottom:14px}
+  .r3{grid-template-columns:repeat(3,1fr)}
+  .r4{grid-template-columns:repeat(4,1fr)}
+  .blk{position:relative; text-align:left; cursor:pointer; width:100%; background:#fff; border:1.5px solid var(--line); border-left:4px solid var(--c,var(--slate)); border-radius:10px; padding:13px 15px; font:inherit; color:inherit; transition:transform .12s ease, box-shadow .12s ease, border-color .12s ease}
+  .blk:hover,.blk:focus-visible{transform:translateY(-2px); box-shadow:0 6px 18px rgba(15,23,42,.10); border-color:var(--c,var(--slate)); outline:none}
+  .blk.dim{opacity:.32; filter:saturate(.4)}
+  .blk.linked{border-color:var(--c,var(--slate)); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 18%,transparent)}
+  .blk.active{border-color:var(--c); box-shadow:0 0 0 3px color-mix(in srgb,var(--c) 30%,transparent)}
+  .blk .t{font-weight:700; color:var(--navy); font-size:14.5px; display:flex; align-items:center; gap:7px}
+  .blk .s{font-size:12.3px; color:var(--slate); margin-top:3px}
+  .ico{width:17px; height:17px; flex:none; color:var(--c)}
+  .missing{--c:var(--red); background:#fef2f2}
+  .missing .t{color:#991b1b}
+  .panel{position:fixed; top:0; right:0; height:100vh; width:var(--panel-w); background:#fff; border-left:1px solid var(--line); box-shadow:-12px 0 32px rgba(15,23,42,.10); transform:translateX(100%); transition:transform .25s ease; display:flex; flex-direction:column; z-index:40}
+  body.panel-open .panel{transform:none}
+  .p-head{padding:20px 24px 15px; border-bottom:1px solid var(--line); background:var(--pale)}
+  .p-head .kind{font-size:10.5px; letter-spacing:.09em; text-transform:uppercase; font-weight:800; color:var(--pc,var(--slate))}
+  .p-head h2{margin:5px 0 5px; font-size:21px; color:var(--navy); letter-spacing:-.01em}
+  .p-head .sub{font-size:13px; color:var(--slate)}
+  .close{position:absolute; top:15px; right:16px; width:30px; height:30px; border:1px solid var(--line); background:#fff; border-radius:7px; cursor:pointer; color:var(--slate); font-size:17px; line-height:1}
+  .close:hover{color:var(--navy); border-color:var(--slate)}
+  .p-body{padding:6px 24px 40px; overflow-y:auto; flex:1}
+  .sec{margin-top:20px}
+  .sec h3{margin:0 0 7px; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); font-weight:800}
+  .sec p{margin:0 0 8px}
+  .sec ul{margin:0; padding-left:18px}
+  .sec li{margin:4px 0}
+  .files{background:var(--light); border:1px solid var(--line); border-radius:9px; padding:11px 13px}
+  .files div{font-family:Consolas,monospace; font-size:12.4px; color:var(--navy); margin:3px 0}
+  .links{display:flex; flex-wrap:wrap; gap:7px}
+  .links button{border:1px solid var(--line); background:#fff; border-radius:999px; padding:5px 12px; font:inherit; font-size:12.5px; cursor:pointer; color:var(--body)}
+  .links button:hover{border-color:var(--blue); color:var(--navy)}
+  .note{border-left:3px solid var(--amber); background:#fffbeb; padding:10px 13px; border-radius:0 8px 8px 0; font-size:13.3px; color:#78350f}
+  .note.ok{border-color:var(--green); background:#f0fdf4; color:#14532d}
+  .note.bad{border-color:var(--red); background:#fef2f2; color:#7f1d1d}
+  .empty{padding:44px 24px; color:var(--muted); text-align:center; font-size:14px}
+  @media (max-width:1150px){:root{--panel-w:100%} body.panel-open .stage{margin-right:0} .r3,.r4{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <main class="stage">
+    <header>
+      <h1>{{POC_NAME}} — Original Architecture</h1>
+      <p>How this POC was actually built, <b>before</b> being ported onto Common Application Base.
+         Every block is what it really has today — including the gaps a production base fills in.</p>
+      <div class="hint">Click any block &nbsp;·&nbsp; blocks in red are things this POC does not have at all</div>
+    </header>
+
+    <div class="band">
+      <div class="band-label">What a user talks to</div>
+      <div class="row r3" id="row-entry"></div>
+    </div>
+
+    <div class="band">
+      <div class="band-label">Where its logic and data live</div>
+      <div class="row r3" id="row-core"></div>
+    </div>
+
+    <div class="band">
+      <div class="band-label">Outbound &amp; background</div>
+      <div class="row r3" id="row-out"></div>
+    </div>
+
+    <div class="band">
+      <div class="band-label">Operational maturity — what a real deployment needs</div>
+      <div class="row r4" id="row-ops"></div>
+    </div>
+  </main>
+
+  <aside class="panel" id="panel" aria-live="polite">
+    <div class="p-head">
+      <button class="close" id="close" title="Close (Esc)">&times;</button>
+      <div class="kind" id="p-kind"></div>
+      <h2 id="p-title"></h2>
+      <div class="sub" id="p-sub"></div>
+    </div>
+    <div class="p-body" id="p-body"><div class="empty">Select a block.</div></div>
+  </aside>
+</div>
+
+<script>
+/* =====================================================================
+   TEMPLATE — architecture-poc.template.html
+   Diagrams a POC as it exists BEFORE porting. Fill BLOCKS from the
+   import-poc skill's own step 0/1 inventory (boundary scan + route/
+   model/task/env-var inventory) — do not guess, use what you actually
+   found reading the POC's code.
+
+   Row layout:
+     entry — what a user/browser talks to directly (frontend, API framework)
+     core  — where logic and data live (backend logic, database, in-memory state)
+     out   — outbound calls and background work (external APIs, scheduler)
+     ops   — operational maturity (auth, logging, error handling, deployment)
+       -> mark a block class="blk missing" when the POC genuinely has none of it;
+          that gap is exactly what porting onto the base will fill in.
+   ===================================================================== */
+const C = {accent:'var(--accent)', blue:'var(--blue)', amber:'var(--amber)',
+           green:'var(--green)', red:'var(--red)', purple:'var(--purple)',
+           slate:'var(--slate)', navy:'var(--navy2)'};
+
+const BLOCKS = {
+
+  frontend: {
+    row:'entry', color:C.blue, kind:'Entry point', title:'Frontend',
+    sub:'{{one-line: framework/stack, or "none — API only"}}', icon:'globe',
+    what:`{{What the UI is: static HTML pages? A SPA? A CLI? Describe exactly what a user opens.}}`,
+    how:`{{How it talks to the backend: fetch() to a bare path? A build step? Served by the same
+          process as the API, or separately?}}`,
+    inputs:['{{what the user provides}}'],
+    outputs:['{{what it renders / calls}}'],
+    links:['backend'],
+    files:['{{real file paths in the POC}}'],
+    note:`{{Anything about this that will need to change during porting — e.g. hardcoded API
+          base URLs, a bundler that needs replacing, etc.}}`
+  },
+
+  backend: {
+    row:'entry', color:C.green, kind:'Entry point', title:'Backend / API framework',
+    sub:'{{e.g. FastAPI, Flask, Express — hand-rolled}}', icon:'layers',
+    what:`{{What framework, how routes are organized, whether there's any structure to it at all.}}`,
+    how:`{{How a request actually gets handled — is there middleware? Is error handling ad-hoc
+          per-route (try/except + HTTPException) or centralized?}}`,
+    inputs:['{{requests it accepts}}'],
+    outputs:['{{responses / status codes it returns, and their shape}}'],
+    links:['frontend','database','state'],
+    files:['{{real file paths}}'],
+    note:`{{What's missing compared to a production base: no correlation ids, no structured
+          logging, inconsistent error shapes, etc. — name the specifics you actually found.}}`
+  },
+
+  database: {
+    row:'core', color:C.amber, kind:'Data', title:'Database',
+    sub:'{{engine + how it connects — e.g. "Postgres via sync SQLAlchemy"}}', icon:'db',
+    what:`{{What it stores, how many tables, roughly what's in them.}}`,
+    how:`{{Session handling: does it open/close a session per call by hand? Any connection
+          pooling? Sync or async?}}`,
+    inputs:['{{writes}}'],
+    outputs:['{{reads}}'],
+    links:['backend'],
+    files:['{{real file paths}}'],
+    note:`{{Anything fragile: no migrations (schema created ad-hoc), no least-privilege role,
+          manual commit/rollback scattered through route code, etc.}}`
+  },
+
+  state: {
+    row:'core', color:C.red, kind:'Data', title:'In-memory state',
+    sub:'{{e.g. a global dict — or "none, all state is in the DB"}}', icon:'folder',
+    what:`{{Does the POC keep any "current" state in a process-level variable? This is a very
+          common POC shortcut and a real correctness risk once more than one worker exists.}}`,
+    how:`{{Where it's read and written from.}}`,
+    inputs:['{{what mutates it}}'],
+    outputs:['{{what reads it}}'],
+    links:['backend'],
+    files:['{{real file paths}}'],
+    note:`{{State that only exists in one process's memory breaks the moment there's more than
+          one worker/replica — call this out explicitly if found; it's a common silent bug.}}`
+  },
+
+  external: {
+    row:'out', color:C.accent, kind:'Outbound', title:'External services',
+    sub:'{{e.g. "OpenAI-compatible LLM API, SMTP"}}', icon:'cloud',
+    what:`{{What third-party services it calls directly, and with what client library.}}`,
+    how:`{{Is there retry logic? Timeouts? Or a bare client with no protection at all?}}`,
+    inputs:['{{what it sends out}}'],
+    outputs:['{{what it gets back}}'],
+    links:['backend'],
+    files:['{{real file paths}}'],
+    note:`{{Hand-rolled outbound calls almost always lack timeouts, retries, and correlation —
+          name what's actually missing.}}`
+  },
+
+  scheduler: {
+    row:'out', color:C.purple, kind:'Async', title:'Background / scheduled work',
+    sub:'{{e.g. APScheduler in-process — or "none"}}', icon:'briefcase',
+    what:`{{Does anything run periodically or off the request path? How is it triggered?}}`,
+    how:`{{In-process (same Python process as the API) or a separate worker?}}`,
+    inputs:['{{trigger}}'],
+    outputs:['{{effect}}'],
+    links:['backend','external'],
+    files:['{{real file paths}}'],
+    note:`{{In-process schedulers tied to app boot are a real risk under multiple workers —
+          the same job can fire once per worker. Call this out if found.}}`
+  },
+
+  auth: {
+    row:'ops', color:C.slate, kind:'Operational gap', title:'Authentication',
+    sub:'{{what it has, or "none"}}', icon:'shield',
+    what:`{{Real login/session/JWT, or completely open?}}`,
+    links:[], files:[],
+    note:`{{If there is a real auth mechanism, note it clearly — porting it is a boundary
+          decision (scoped to the feature package), not a base-wide change, unless the user
+          wants it to become the base's real auth.}}`
+  },
+
+  logging: {
+    row:'ops', color:C.slate, kind:'Operational gap', title:'Logging & error handling',
+    sub:'{{e.g. print() and per-route HTTPException — or "none"}}', icon:'terminal',
+    what:`{{How does the POC currently know what happened, and what does an error response
+          look like to a caller?}}`,
+    links:[], files:[],
+    note:`{{This is exactly what the base's correlation/structured-logging/error-shape system
+          replaces — this block usually ends up almost entirely deleted, not ported.}}`
+  },
+
+  deploy: {
+    row:'ops', color:C.slate, kind:'Operational gap', title:'Deployment',
+    sub:'{{e.g. own Dockerfile + docker-compose — or "run locally only"}}', icon:'box',
+    what:`{{Does it have its own container setup? Its own observability stack?}}`,
+    links:[], files:[],
+    note:`{{This gets discarded wholesale — the base already has Postgres/Redis/MinIO/Grafana/
+          Loki/Prometheus/Tempo, and a POC's own copies are redundant or conflicting.}}`
+  },
+
+  observability: {
+    row:'ops', color:C.slate, kind:'Operational gap', title:'Monitoring',
+    sub:'none', icon:'chart',
+    what:`{{Almost always: none. A POC has no metrics, no traces, no dashboard.}}`,
+    links:[], files:[],
+    note:`This is inherited automatically the moment the logic moves onto the base — it is not
+          something to build.`
+  }
+};
+
+const ICONS={
+ globe:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18"/>',
+ layers:'<path d="M12 3 3 8l9 5 9-5-9-5z"/><path d="M3 14l9 5 9-5"/>',
+ db:'<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/>',
+ folder:'<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+ cloud:'<path d="M6 18a4 4 0 0 1 .8-7.9A6 6 0 0 1 18.6 10a3.5 3.5 0 0 1-.6 8z"/>',
+ briefcase:'<rect x="2" y="7" width="20" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+ shield:'<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/>',
+ terminal:'<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M13 15h5"/>',
+ box:'<path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+ chart:'<path d="M3 21V3"/><path d="M3 17l5-5 4 4 8-8"/>'
+};
+const svg=n=>`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[n]||ICONS.box}</svg>`;
+
+function blockEl(id){
+  const b=BLOCKS[id];
+  const el=document.createElement('button');
+  const isGap = b.row==='ops' && (b.sub||'').toLowerCase().includes('none');
+  el.className='blk'+(isGap?' missing':''); el.dataset.id=id; el.style.setProperty('--c',b.color);
+  el.innerHTML=`<div class="t">${svg(b.icon)}${b.title}</div><div class="s">${b.sub}</div>`;
+  return el;
+}
+const put=(sel,ids)=>ids.forEach(id=>document.querySelector(sel).appendChild(blockEl(id)));
+put('#row-entry',['frontend','backend']);
+put('#row-core', ['database','state']);
+put('#row-out',  ['external','scheduler']);
+put('#row-ops',  ['auth','logging','deploy','observability']);
+
+const panel=document.getElementById('panel');
+const P={kind:document.getElementById('p-kind'),title:document.getElementById('p-title'),
+         sub:document.getElementById('p-sub'),body:document.getElementById('p-body')};
+let currentId=null;
+const sec=(h,html)=>`<div class="sec"><h3>${h}</h3>${html}</div>`;
+const list=a=>`<ul>${a.map(x=>`<li>${x}</li>`).join('')}</ul>`;
+
+function open(id){
+  const b=BLOCKS[id]; if(!b) return;
+  currentId=id;
+  document.body.classList.add('panel-open');
+  panel.style.setProperty('--pc',b.color);
+  P.kind.textContent=b.kind; P.kind.style.color=b.color;
+  P.title.innerHTML=b.title; P.sub.innerHTML=b.sub;
+  let h='';
+  h+=sec('What it is',`<p>${b.what}</p>`);
+  if(b.how) h+=sec('How it works today',`<p>${b.how}</p>`);
+  if(b.inputs||b.outputs){
+    h+=sec('Inputs &amp; outputs',
+      `<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>${list(b.inputs||[])}</div><div>${list(b.outputs||[])}</div></div>`);
+  }
+  if(b.links&&b.links.length)
+    h+=sec('Connected to',`<div class="links">${b.links.map(l=>
+      `<button data-goto="${l}">${BLOCKS[l]?BLOCKS[l].title:l} &rarr;</button>`).join('')}</div>`);
+  if(b.files&&b.files.length) h+=sec('Where it lives',`<div class="files">${b.files.map(f=>`<div>${f}</div>`).join('')}</div>`);
+  if(b.note) h+=sec('Worth knowing',`<div class="note${b.row==='ops'?' bad':''}">${b.note}</div>`);
+  P.body.innerHTML=h; P.body.scrollTop=0;
+  paint(id);
+}
+function paint(id){
+  const b=BLOCKS[id]; const near=new Set([id,...(b.links||[])]);
+  document.querySelectorAll('.blk').forEach(el=>{
+    const i=el.dataset.id;
+    el.classList.toggle('active', i===id);
+    el.classList.toggle('linked', i!==id && near.has(i));
+    el.classList.toggle('dim',    !near.has(i));
+  });
+}
+function clear(){
+  document.body.classList.remove('panel-open'); currentId=null;
+  document.querySelectorAll('.blk').forEach(el=>el.classList.remove('active','linked','dim'));
+}
+document.addEventListener('click',e=>{
+  const goto=e.target.closest('[data-goto]');
+  if(goto){ open(goto.dataset.goto); return; }
+  const el=e.target.closest('.blk');
+  if(el){ open(el.dataset.id); return; }
+});
+document.getElementById('close').addEventListener('click',clear);
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') clear(); });
+</script>
+</body>
+</html>
