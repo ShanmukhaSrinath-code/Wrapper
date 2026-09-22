@@ -431,15 +431,38 @@ as a worked example) and, for **every block that is even remotely touched**,
 add a `used` property rendered as a highlighted "In this application" panel
 section — not just the Core Logic block. Concretely:
 
+**First, get `CORE_PROVIDES` right — this is the most common mistake.** Every
+block falls into one of two kinds, and mixing them up produces a diagram that
+looks broken even when the port isn't:
+
+- **Ambient** — `middleware`, `ratelimit`, `errors`, `structlog`,
+  `observability` (and their kin). These wrap **every** route the instant
+  `app.add_middleware(...)` runs in `app/main.py`, which happens once, for the
+  whole app, regardless of which feature owns the route. A feature cannot opt
+  out of these and doesn't write any code to get them. They must **always**
+  be listed in `CORE_PROVIDES` and must **never** be marked `unused` — doing
+  so is a diagram bug, not an honest finding, even if the feature's own code
+  never mentions rate limiting or correlation by name. (This exact mistake
+  shipped once: `ratelimit` was left out of `CORE_PROVIDES`, so the diagram
+  showed it as unconnected from Core Logic even though every TalentIQ request
+  was — and had always been — rate-limited. Verify with the app's own
+  middleware registration list, not with a grep of the feature's code.)
+- **Opt-in** — `cache`, `storage`, `queue`/`worker`, `audit`, `external`. A
+  feature reaches for these only where they fit; not using one is a normal,
+  considered decision. This is where `unused: true` belongs.
+
 - `api` — every real route this feature mounted (path + method), not "see the
   router file."
 - `db` — every real table name, and why the PK types were chosen (e.g. kept
   as integers because the frontend does `Number(id)` somewhere — check step
   2a's findings for this).
-- `cache` / `storage` / `breaker` — if the feature genuinely doesn't use one
-  of these, **say so explicitly** (`unused: true`, a grey "not used" note, not
-  silence). A reader should be able to tell what a feature *doesn't* touch as
-  easily as what it does.
+- `cache` / `storage` / `breaker` (opt-in) — if the feature genuinely doesn't
+  use one of these, **say so explicitly** (`unused: true`, a grey "not used"
+  note, not silence) **and give the real engineering reason**, not just "not
+  used" — e.g. cache: "the read is cheap and changes on almost every request,
+  so the invalidation complexity wouldn't pay for itself," not merely "no
+  cache calls found." A reader should be able to tell what a feature *doesn't*
+  touch, and *why that was the right call*, as easily as what it does.
 - `external` — name the actual third-party service and library (e.g. "Groq
   via the OpenAI SDK, not through `app.core.http`" — and say why, if the
   reason is a real one like "a typed SDK with its own retry semantics").
@@ -491,4 +514,5 @@ the new/changed blocks.
 | skip step 8's architecture artifacts because the port already "feels done" | generate all three — they're part of the deliverable, not optional polish |
 | only fill in the Core Logic block on the integrated page | every touched block gets an "In this application" section — `db`, `external`, `audit`, `queue` especially |
 | leave a block's real usage unstated when the feature doesn't use it | mark it `unused: true` with a grey note saying so explicitly — silence there reads as "forgot to check," not "not applicable" |
+| mark an ambient capability (`middleware`, `ratelimit`, `errors`, `structlog`, `observability`) as `unused` or leave it out of `CORE_PROVIDES` because the feature's own code never calls it | these apply to every route automatically via `app.add_middleware(...)` in `app/main.py` — always list and link them, never mark unused; "the feature's code doesn't mention it" is irrelevant, it's applied regardless |
 | ship an architecture HTML page without checking it renders | `node --check` the extracted `<script>` block before reporting done — a stray unescaped quote in a content string breaks the whole page silently |

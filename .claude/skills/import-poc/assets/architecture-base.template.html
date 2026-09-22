@@ -758,12 +758,24 @@ health:{row:'infra', color:C.green, kind:'Operations', title:'Health probes',
    See architecture-integrated.template.html for the filled-in version. */
 const CORE_SERVICES = [];
 
+/* Ambient: applied to every route automatically, zero feature code required.
+   These must ALWAYS appear here — a feature can't opt out, so the diagram
+   must never show it as unconnected. Opt-in: tools a feature reaches for
+   when they fit; genuinely not using one is a normal, statable decision,
+   not a gap (see each block's own "In this application" note). */
 const CORE_PROVIDES = [
-  ['db','Sessions, models, migrations'], ['cache','Cache-aside reads'],
-  ['storage','Object storage'], ['queue','Enqueue background work'],
-  ['worker','Run it, correlated'], ['audit','Prove who did what'],
-  ['external','Call other services'], ['errors','Fail in one shape'],
-  ['structlog','Log with the ids attached'], ['observability','The correlation contract']
+  ['middleware','Correlation, CORS, security headers — every request'],
+  ['ratelimit','Protects every route automatically'],
+  ['errors','Fail in one shape'],
+  ['structlog','Log with the ids attached'],
+  ['observability','The correlation contract'],
+  ['db','Sessions, models, migrations'],
+  ['cache','Cache-aside reads (opt-in)'],
+  ['storage','Object storage (opt-in)'],
+  ['queue','Enqueue background work (opt-in)'],
+  ['worker','Run it, correlated (opt-in)'],
+  ['audit','Prove who did what (opt-in)'],
+  ['external','Call other services (opt-in)']
 ];
 
 const ICONS={
@@ -867,6 +879,14 @@ function openCore(){
     : sec('Services inside this block',
         `<div class="empty" style="padding:20px 4px">Nothing ported yet. This is the clean
          base — run the <code>import-poc</code> skill to bring a feature's logic in here.</div>`);
+  h+=sec('Two kinds of capability',
+   `<div class="note">Some of these apply to <b>every</b> route the instant it exists —
+     correlation, security headers, rate limiting, the error shape, structured logging, tracing
+     and metrics. No feature code calls them; they wrap the request whether a feature "uses"
+     them or not, so they should never show up as unconnected in a diagram like this one.<br><br>
+     Others are <b>tools a feature reaches for when they fit</b> — cache, object storage, the
+     job queue, the outbound client, audit. Genuinely not using one of these is a normal,
+     considered engineering decision (say why), not a missing wire.</div>`);
   h+=sec('What the base hands you (click any)',
    `<div class="links">${CORE_PROVIDES.map(([id,label])=>
       `<button data-goto="${id}">${label} &rarr;</button>`).join('')}</div>`);
