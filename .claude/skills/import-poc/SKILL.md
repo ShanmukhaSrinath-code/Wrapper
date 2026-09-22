@@ -189,6 +189,51 @@ Apply every one of these while porting; do not leave a POC-native version
 | `pydantic.BaseSettings` reading its own env vars | fold feature-specific env vars into `app/core/config.py`'s `Settings` only if truly infra-level; otherwise keep them local constants in the feature package — do not create a second settings object |
 | its own Dockerfile / requirements.txt | discarded — the feature ships inside the existing `app` image; add any *new* third-party dependency to this repo's `pyproject.toml`, **then run `uv lock`** — editing `pyproject.toml` alone leaves `uv.lock` stale, and the Docker build installs from the lock, not the pyproject file. A stale lock means the container silently ships without the new dependency and fails at import time, not at build time. |
 
+### 3a. Actively evaluate cache and object storage — don't default to "not used"
+
+The table above is about replacing infra the POC already had. This is about
+capabilities the POC's author never had access to at all, because their
+project didn't have this base underneath it. A port that never asks "would
+this feature actually benefit from the cache / the object store" and instead
+defaults to skipping both isn't neutral — it's leaving value on the table that
+a from-scratch `add-feature` build would have reached for. Ask, concretely,
+for every port:
+
+- **Object storage — does this feature accept file uploads?** If the POC
+  extracts data from an uploaded file (parses a PDF, reads a spreadsheet,
+  OCRs an image) and then discards the original bytes, keeping only the
+  derived text/data in Postgres, that is very often a real gap, not a
+  deliberate choice the POC author made — most POCs never had an object store
+  to put it in, so "we didn't keep the original file" was the *only* option,
+  not the *chosen* one. Store the original via `get_storage().put(...)`, keep
+  the key on the row, and add a download route (see
+  `app/services/files.py` for the pattern: `Content-Disposition: attachment`,
+  a 404 via `NotFoundError` on a missing key). Clean up the stored object when
+  the row is deleted, the same way you clean up its DB rows.
+- **Cache — is there a read endpoint that's actually called repeatedly?**
+  Don't judge this by "is any single query expensive" — judge it by real
+  usage: a dashboard that loads this endpoint on every page view, a list that
+  refreshes after every write action, a candidate/record listing a user
+  revisits constantly while working. If the answer is yes, and the data
+  tolerates a few seconds of staleness, wrap it in
+  `cache.get_or_set(key, producer, ttl_seconds=...)` with a **short** TTL
+  (15–30s is usually right for something read constantly but not needing
+  perfect real-time accuracy) and enumerate **every** write path that changes
+  what it returns — miss one and you've shipped a cache that occasionally
+  lies. (A single global listing endpoint invalidated from 5–7 different
+  mutating routes is normal; find them all by grepping for what the read
+  endpoint actually joins/embeds, not just its own table.)
+
+**This is a judgment call each time, not a rule to apply uniformly** — a read
+that's genuinely rare, or genuinely can't tolerate staleness (a balance check,
+a live auction bid), correctly stays uncached, and a feature with no file
+upload at all correctly uses no object storage. The failure mode this section
+exists to prevent is not "sometimes not using cache/storage" — it's **never
+seriously asking the question** and defaulting to "the POC didn't do it, so
+neither will the port." Do this evaluation *during* the port (this step), not
+retroactively while writing the step 8 diagram — the diagram documents the
+decision, it should never be where the decision first gets made.
+
 ## 4. Models and migration
 
 Point every model at `app.core.db.Base`. Then:
@@ -456,13 +501,18 @@ looks broken even when the port isn't:
 - `db` — every real table name, and why the PK types were chosen (e.g. kept
   as integers because the frontend does `Number(id)` somewhere — check step
   2a's findings for this).
-- `cache` / `storage` / `breaker` (opt-in) — if the feature genuinely doesn't
-  use one of these, **say so explicitly** (`unused: true`, a grey "not used"
-  note, not silence) **and give the real engineering reason**, not just "not
-  used" — e.g. cache: "the read is cheap and changes on almost every request,
-  so the invalidation complexity wouldn't pay for itself," not merely "no
-  cache calls found." A reader should be able to tell what a feature *doesn't*
-  touch, and *why that was the right call*, as easily as what it does.
+- `cache` / `storage` / `breaker` (opt-in) — by the time you write this page,
+  step 3a should already have decided whether the feature genuinely uses
+  each of these — this page documents that decision, it does not make it.
+  If the honest answer is "not used," **say so explicitly** (`unused: true`,
+  a grey "not used" note, not silence) **and give the real engineering
+  reason**, not just "not used" — e.g. "the read is genuinely rare and the
+  data can't tolerate any staleness," not merely "no cache calls found." A
+  reader should be able to tell what a feature *doesn't* touch, and *why that
+  was the right call*, as easily as what it does. (A feature that uploads
+  files and never touches object storage, or has an obviously-repeated read
+  and never touches cache, is a sign step 3a was skipped, not a valid finding
+  — go back and do it.)
 - `external` — name the actual third-party service and library (e.g. "Groq
   via the OpenAI SDK, not through `app.core.http`" — and say why, if the
   reason is a real one like "a typed SDK with its own retry semantics").
@@ -515,4 +565,7 @@ the new/changed blocks.
 | only fill in the Core Logic block on the integrated page | every touched block gets an "In this application" section — `db`, `external`, `audit`, `queue` especially |
 | leave a block's real usage unstated when the feature doesn't use it | mark it `unused: true` with a grey note saying so explicitly — silence there reads as "forgot to check," not "not applicable" |
 | mark an ambient capability (`middleware`, `ratelimit`, `errors`, `structlog`, `observability`) as `unused` or leave it out of `CORE_PROVIDES` because the feature's own code never calls it | these apply to every route automatically via `app.add_middleware(...)` in `app/main.py` — always list and link them, never mark unused; "the feature's code doesn't mention it" is irrelevant, it's applied regardless |
+| port a file-upload feature straight through to Postgres-only and mark `storage: unused` because "the POC didn't keep the original file either" | that's exactly the gap step 3a exists to catch — the POC skipped it because it had no object store *available*, not because keeping the original file was the wrong call; store it |
+| judge whether to cache a read by "is this one query expensive" | judge by real usage instead — a dashboard load, a refresh-after-every-action, a listing revisited constantly. A cheap query hit constantly is still worth a short-TTL cache; an expensive query hit once a day usually isn't |
+| add a cache without finding every route that invalidates it | grep for everything that touches the same underlying rows the cached read embeds, not just the read's own table — missing an invalidation path ships a cache that lies |
 | ship an architecture HTML page without checking it renders | `node --check` the extracted `<script>` block before reporting done — a stray unescaped quote in a content string breaks the whole page silently |
